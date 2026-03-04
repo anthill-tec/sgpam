@@ -12,7 +12,7 @@ install=sgpam.install
 source=()
 
 prepare() {
-    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,LICENSE} "$srcdir/"
+    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,LICENSE,sg_enroll.1,pam_sgfp.8} "$srcdir/"
     cp -a "$startdir"/tests "$srcdir/"
 }
 
@@ -35,6 +35,9 @@ package() {
 
     # Template directory — restrictive permissions (root-only, stores biometric data)
     install -dm700 "$pkgdir/etc/security/sg_fingerprints"
+
+    install -Dm644 sg_enroll.1 "$pkgdir/usr/share/man/man1/sg_enroll.1"
+    install -Dm644 pam_sgfp.8  "$pkgdir/usr/share/man/man8/pam_sgfp.8"
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

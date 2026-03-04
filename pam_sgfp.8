@@ -1,0 +1,150 @@
+.TH PAM_SGFP 8 "2026-03-04" "sgpam 0.1.0" "System Administration"
+.SH NAME
+pam_sgfp \- PAM module for SecuGen fingerprint authentication
+.SH SYNOPSIS
+.B auth
+.RI [ sufficient | required ]
+.B pam_sgfp.so
+.SH DESCRIPTION
+.B pam_sgfp
+is a PAM authentication module that captures a live fingerprint from
+a SecuGen U20 reader and matches it against a template previously
+enrolled with
+.BR sg_enroll (1).
+.PP
+Templates are read from
+.IR /etc/security/sg_fingerprints/ username .tpl .
+If no template exists for the authenticating user, the module returns
+.B PAM_USER_UNKNOWN
+so that a subsequent PAM rule (typically password authentication) can
+take over.
+This enables a graceful fallback: enrolled users authenticate by
+fingerprint, while unenrolled users are silently passed through to
+password.
+.PP
+The module prompts
+.RB \(lq "Place finger on scanner..." \(rq
+via the PAM conversation function, then captures with a 10-second
+timeout.
+Matching uses security level
+.B SL_ABOVE_NORMAL
+(match score >= 90/199).
+.SH MODULE TYPES PROVIDED
+.B auth
+.SH RETURN VALUES
+.TP
+.B PAM_SUCCESS
+The live fingerprint matched the enrolled template.
+.TP
+.B PAM_AUTH_ERR
+Authentication failed.
+This covers: match failure, capture timeout, SDK initialisation
+errors, device not found, or invalid username.
+.TP
+.B PAM_USER_UNKNOWN
+No enrolled template was found for the user.
+When
+.B pam_sgfp.so
+is configured as
+.BR sufficient ,
+PAM skips it and tries the next module in the stack.
+.SH FILES
+.TP
+.I /usr/lib/security/pam_sgfp.so
+The shared library installed by the package.
+.TP
+.I /etc/security/sg_fingerprints/
+Directory containing per-user fingerprint templates (mode 0700, root only).
+.TP
+.IR /etc/security/sg_fingerprints/ username .tpl
+Enrolled template for
+.IR username
+(mode 0600).
+.SH SECURITY
+.TP
+.B Match threshold
+Uses
+.B SL_ABOVE_NORMAL
+security level, requiring a match score of at least 90 out of 199.
+.TP
+.B Template format
+Templates use SecuGen SG400 format with AES encryption.
+.TP
+.B Capture quality floor
+Images scoring below 40/100 quality are rejected before matching.
+.TP
+.B Path traversal protection
+Usernames are validated against a strict character set before
+constructing the template file path.
+Slashes and special characters are rejected.
+.TP
+.B Image dimension guard
+Abnormal image dimensions (0 or >4096 in either axis) are rejected
+to prevent buffer overflow.
+.SH DIAGNOSTICS
+All messages are logged via
+.BR syslog (3)
+with facility
+.BR LOG_AUTH .
+.TP
+.B "pam_sgfp: fingerprint accepted for user \(aq%s\(aq"
+.RB ( LOG_INFO )
+Authentication succeeded.
+.TP
+.B "pam_sgfp: fingerprint rejected for user \(aq%s\(aq"
+.RB ( LOG_NOTICE )
+The live fingerprint did not match the enrolled template.
+.TP
+.B "pam_sgfp: no enrolled fingerprint for user \(aq%s\(aq"
+.RB ( LOG_NOTICE )
+No template file found; module returns
+.BR PAM_USER_UNKNOWN .
+.TP
+.B "pam_sgfp: capture failed for \(aq%s\(aq"
+.RB ( LOG_NOTICE )
+The scanner timed out or the finger was removed before capture completed.
+.TP
+.B "pam_sgfp: SGFPM_OpenDevice failed \(em scanner connected?"
+.RB ( LOG_ERR )
+The SecuGen U20 reader was not detected on any USB port.
+.TP
+.B "pam_sgfp: invalid username rejected (path traversal?)"
+.RB ( LOG_WARNING )
+The PAM username contained disallowed characters.
+.SH EXAMPLES
+.SS sudo authentication
+Add to
+.I /etc/pam.d/sudo
+before the existing password rule:
+.PP
+.RS
+.nf
+auth  sufficient  pam_sgfp.so
+auth  include     system-auth
+.fi
+.RE
+.SS Display manager (SDDM)
+Add to
+.IR /etc/pam.d/sddm :
+.PP
+.RS
+.nf
+auth  sufficient  pam_sgfp.so
+auth  include     system-login
+.fi
+.RE
+.SS Console login
+Add to
+.IR /etc/pam.d/login :
+.PP
+.RS
+.nf
+auth  sufficient  pam_sgfp.so
+auth  include     system-local-login
+.fi
+.RE
+.SH SEE ALSO
+.BR sg_enroll (1),
+.BR pam (8),
+.BR pam.d (5),
+.BR pam.conf (5)

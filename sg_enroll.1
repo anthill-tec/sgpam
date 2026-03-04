@@ -1,0 +1,101 @@
+.TH SG_ENROLL 1 "2026-03-04" "sgpam 0.1.0" "User Commands"
+.SH NAME
+sg_enroll \- enroll a fingerprint for PAM authentication
+.SH SYNOPSIS
+.B sg_enroll
+.I username
+.SH DESCRIPTION
+.B sg_enroll
+captures two fingerprint samples from a SecuGen U20 reader, verifies
+that they match, and writes the resulting template to
+.IR /etc/security/sg_fingerprints/ username .tpl .
+.PP
+The enrolled template is later used by
+.BR pam_sgfp (8)
+to authenticate the user via fingerprint.
+.PP
+Each sample is attempted up to three times if the capture fails or
+quality is below the enrolment threshold (50/100).
+After both samples are captured, they are matched at security level
+.B SL_NORMAL
+to confirm they belong to the same finger.
+A match score (0\(en199) is printed on success.
+.SH OPTIONS
+None.
+.B sg_enroll
+takes exactly one argument: the target
+.IR username .
+.SH EXIT STATUS
+.TP
+.B 0
+Enrolment succeeded; template written.
+.TP
+.B 1
+An error occurred (device not found, quality too low, samples did not
+match, permission denied, etc.).
+.SH FILES
+.TP
+.I /etc/security/sg_fingerprints/
+Directory holding per-user fingerprint templates.
+Created automatically with mode 0700 if it does not exist.
+.TP
+.IR /etc/security/sg_fingerprints/ username .tpl
+Enrolled template for
+.IR username .
+Written with mode 0600, owned by root.
+Uses SecuGen SG400 format (AES-encrypted, approximately 400 bytes).
+.SH SECURITY
+.TP
+.B Root required
+.B sg_enroll
+must be run as root (typically via
+.BR sudo (8)).
+It exits immediately if
+.B euid
+is not 0.
+.TP
+.B Umask
+A umask of 0077 is set at startup so that the template directory and
+files are never world-accessible.
+.TP
+.B Path traversal protection
+Usernames are validated against a strict character set
+(alphanumeric, underscore, hyphen, dot; max 255 characters).
+Slashes and other special characters are rejected.
+.TP
+.B Template encryption
+Templates are stored in SG400 format, which applies AES encryption
+within the SecuGen SDK.
+.SH DIAGNOSTICS
+.TP
+.B "SGFPM_OpenDevice \(em is the U20 plugged in?"
+The SecuGen U20 reader was not detected on any USB port.
+.TP
+.B "Quality too low"
+The captured image scored below the enrolment quality threshold (50/100).
+Reposition the finger and try again.
+.TP
+.B "Samples did not match"
+The two captured samples could not be confirmed as the same finger.
+Run
+.B sg_enroll
+again using the same finger for both captures.
+.TP
+.B "Capture failed"
+The scanner timed out (15 seconds) or the finger was removed too early.
+.TP
+.B "Invalid username"
+The supplied username contained disallowed characters or was empty.
+.SH EXAMPLES
+Enroll user
+.IR alice :
+.PP
+.RS
+.nf
+sudo sg_enroll alice
+.fi
+.RE
+.SH SEE ALSO
+.BR pam_sgfp (8),
+.BR pam (8),
+.BR pam.d (5)
