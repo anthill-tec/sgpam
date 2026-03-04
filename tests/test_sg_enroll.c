@@ -202,3 +202,81 @@ Test(sg_enroll, invalid_security_level, .init = setup, .fini = teardown)
     int rc = sg_enroll_main(5, argv);
     cr_assert_eq(rc, 1, "should reject invalid security level");
 }
+
+/* ── Removal tests ────────────────────────────────────────── */
+
+Test(sg_enroll, remove_specific_finger, .init = setup, .fini = teardown)
+{
+    /* Pre-create template */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/alice_right-index.tpl", test_template_dir);
+    FILE *f = fopen(path, "wb");
+    BYTE data[400] = {0};
+    fwrite(data, 1, 400, f);
+    fclose(f);
+
+    char *argv[] = {"sg_enroll", "--remove", "alice", "right-index", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 0, "remove should succeed, got %d", rc);
+    cr_assert_neq(access(path, F_OK), 0, "template should be deleted");
+}
+
+Test(sg_enroll, remove_nonexistent_finger, .init = setup, .fini = teardown)
+{
+    char *argv[] = {"sg_enroll", "--remove", "alice", "left-thumb", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 1, "should fail when template does not exist");
+}
+
+Test(sg_enroll, remove_nonexistent_user, .init = setup, .fini = teardown)
+{
+    char *argv[] = {"sg_enroll", "--remove", "nobody", "right-index", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 1, "should fail for non-enrolled user");
+}
+
+Test(sg_enroll, remove_invalid_finger_name, .init = setup, .fini = teardown)
+{
+    char *argv[] = {"sg_enroll", "--remove", "alice", "pinky", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 1, "should reject invalid finger name");
+}
+
+Test(sg_enroll, remove_legacy_template, .init = setup, .fini = teardown)
+{
+    /* Pre-create legacy template */
+    char path[512];
+    snprintf(path, sizeof(path), "%s/bob.tpl", test_template_dir);
+    FILE *f = fopen(path, "wb");
+    BYTE data[400] = {0};
+    fwrite(data, 1, 400, f);
+    fclose(f);
+
+    char *argv[] = {"sg_enroll", "--remove", "bob", "legacy", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 0, "remove legacy should succeed, got %d", rc);
+    cr_assert_neq(access(path, F_OK), 0, "legacy template should be deleted");
+}
+
+Test(sg_enroll, remove_leaves_other_fingers, .init = setup, .fini = teardown)
+{
+    /* Pre-create two templates */
+    char path1[512], path2[512];
+    snprintf(path1, sizeof(path1), "%s/alice_right-index.tpl", test_template_dir);
+    snprintf(path2, sizeof(path2), "%s/alice_left-thumb.tpl", test_template_dir);
+
+    BYTE data[400] = {0};
+    FILE *f = fopen(path1, "wb");
+    fwrite(data, 1, 400, f);
+    fclose(f);
+
+    f = fopen(path2, "wb");
+    fwrite(data, 1, 400, f);
+    fclose(f);
+
+    char *argv[] = {"sg_enroll", "--remove", "alice", "right-index", NULL};
+    int rc = sg_enroll_main(4, argv);
+    cr_assert_eq(rc, 0, "remove should succeed, got %d", rc);
+    cr_assert_neq(access(path1, F_OK), 0, "right-index should be deleted");
+    cr_assert_eq(access(path2, F_OK), 0, "left-thumb should still exist");
+}

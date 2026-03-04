@@ -9,6 +9,7 @@
  * Usage:
  *   sudo sg_enroll <username> [finger-name] [-s LEVEL]
  *   sudo sg_enroll --list <username>
+ *   sudo sg_enroll --remove <username> [finger-name]
  */
 
 #include <stdio.h>
@@ -166,6 +167,120 @@ static int list_enrolled_fingers(const char *username)
     return 0;
 }
 
+/* ── remove enrolled finger ───────────────────────────────── */
+
+static int remove_enrolled_finger(const char *username, const char *finger)
+{
+    char path[512];
+    if (strcmp(finger, "legacy") == 0)
+        snprintf(path, sizeof(path), "%s/%s.tpl", TEMPLATE_DIR, username);
+    else
+        snprintf(path, sizeof(path), "%s/%s_%s.tpl", TEMPLATE_DIR, username, finger);
+
+    if (access(path, F_OK) != 0) {
+        fprintf(stderr, "No enrolled template for '%s' finger '%s'\n",
+                username, finger);
+        return 1;
+    }
+
+    if (isatty(STDIN_FILENO)) {
+        printf("Remove '%s' finger '%s'? [y/N] ", username, finger);
+        fflush(stdout);
+        int c = getchar();
+        int ch;
+        while ((ch = getchar()) != '\n' && ch != EOF)
+            ;
+        if (c != 'y' && c != 'Y') {
+            printf("Cancelled.\n");
+            return 0;
+        }
+    }
+
+    if (unlink(path) != 0) {
+        fprintf(stderr, "Failed to remove %s: %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    printf("Removed '%s' finger '%s'\n", username, finger);
+    return 0;
+}
+
+/* ── interactive finger selection for removal ────────────── */
+
+static char *select_enrolled_finger(const char *username)
+{
+    char pattern[512];
+    snprintf(pattern, sizeof(pattern), "%s/%s_*.tpl", TEMPLATE_DIR, username);
+
+    glob_t globbuf;
+    int grc = glob(pattern, 0, NULL, &globbuf);
+
+    char legacy_path[512];
+    snprintf(legacy_path, sizeof(legacy_path), "%s/%s.tpl", TEMPLATE_DIR, username);
+    int has_legacy = (access(legacy_path, R_OK) == 0);
+
+    int named_count = (grc == 0 ? (int)globbuf.gl_pathc : 0);
+    int total = named_count + (has_legacy ? 1 : 0);
+
+    if (total == 0) {
+        printf("No enrolled fingers for '%s'\n", username);
+        if (grc == 0) globfree(&globbuf);
+        return NULL;
+    }
+
+    /* Build list of finger names */
+    char **names = malloc((size_t)total * sizeof(char *));
+    if (!names) {
+        if (grc == 0) globfree(&globbuf);
+        return NULL;
+    }
+    int idx = 0;
+
+    printf("Enrolled fingers for '%s':\n", username);
+
+    if (grc == 0) {
+        for (size_t i = 0; i < globbuf.gl_pathc; i++) {
+            const char *base = strrchr(globbuf.gl_pathv[i], '/');
+            base = base ? base + 1 : globbuf.gl_pathv[i];
+            const char *fname = base + strlen(username) + 1;
+            size_t flen = strlen(fname);
+            if (flen > 4) {
+                names[idx] = strndup(fname, flen - 4);
+                printf("  %2d. %s\n", idx + 1, names[idx]);
+                idx++;
+            }
+        }
+        globfree(&globbuf);
+    }
+
+    if (has_legacy) {
+        names[idx] = strdup("legacy");
+        printf("  %2d. (legacy single-finger)\n", idx + 1);
+        idx++;
+    }
+
+    printf("\nChoice [1-%d]: ", idx);
+    fflush(stdout);
+
+    int choice = 0;
+    if (scanf("%d", &choice) != 1 || choice < 1 || choice > idx) {
+        fprintf(stderr, "Invalid choice.\n");
+        for (int i = 0; i < idx; i++) free(names[i]);
+        free(names);
+        return NULL;
+    }
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF)
+        ;
+
+    char *selected = names[choice - 1];
+    for (int i = 0; i < idx; i++) {
+        if (i != choice - 1) free(names[i]);
+    }
+    free(names);
+    return selected;
+}
+
 /* ── usage ────────────────────────────────────────────────── */
 
 static void print_usage(const char *argv0)
@@ -174,16 +289,18 @@ static void print_usage(const char *argv0)
         "Usage:\n"
         "  sudo %s <username> [finger-name] [-s LEVEL]\n"
         "  sudo %s --list <username>\n"
+        "  sudo %s --remove <username> [finger-name]\n"
         "\n"
         "Options:\n"
         "  -s LEVEL   Security level: lowest, lower, low, below_normal,\n"
         "             normal (default), above_normal, high, higher, highest\n"
         "  --list     List enrolled fingers\n"
+        "  --remove   Remove an enrolled finger (use 'legacy' for old templates)\n"
         "\n"
         "Finger names:\n"
         "  right-thumb  right-index  right-middle  right-ring  right-little\n"
         "  left-thumb   left-index   left-middle   left-ring   left-little\n",
-        argv0, argv0);
+        argv0, argv0, argv0);
 }
 
 /* ── main ─────────────────────────────────────────────────── */
@@ -195,10 +312,13 @@ int main(int argc, char *argv[])
     const char *finger = NULL;
     const char *sec_name = NULL;
     int list_mode = 0;
+    int remove_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--list") == 0) {
             list_mode = 1;
+        } else if (strcmp(argv[i], "--remove") == 0) {
+            remove_mode = 1;
         } else if (strcmp(argv[i], "-s") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Option -s requires an argument\n");
@@ -239,6 +359,25 @@ int main(int argc, char *argv[])
 
     if (list_mode)
         return list_enrolled_fingers(username);
+
+    if (remove_mode) {
+        if (finger) {
+            if (strcmp(finger, "legacy") != 0 && !valid_finger_name(finger)) {
+                fprintf(stderr, "Unknown finger name '%s'\n", finger);
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else if (isatty(STDIN_FILENO)) {
+            finger = select_enrolled_finger(username);
+            if (!finger) return 1;
+        } else {
+            fprintf(stderr, "Finger name required in non-interactive mode\n");
+            fprintf(stderr, "Usage: sudo %s --remove <username> <finger-name>\n",
+                    argv[0]);
+            return 1;
+        }
+        return remove_enrolled_finger(username, finger);
+    }
 
     /* Parse security level */
     DWORD securityLevel = DEFAULT_SECURITY;

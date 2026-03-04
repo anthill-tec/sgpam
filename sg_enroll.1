@@ -10,6 +10,10 @@ sg_enroll \- enroll a fingerprint for PAM authentication
 .br
 .B sg_enroll \-\-list
 .I username
+.br
+.B sg_enroll \-\-remove
+.I username
+.RI [ finger-name ]
 .SH DESCRIPTION
 .B sg_enroll
 captures two fingerprint samples from a SecuGen U20 reader, verifies
@@ -58,6 +62,21 @@ The number in parentheses is the minimum match score (out of 199).
 List enrolled fingers for the given user.
 Requires root (via
 .BR sudo (8)).
+.TP
+.B \-\-remove
+Remove an enrolled finger template.
+If
+.I finger-name
+is given, the specified template is removed directly.
+If omitted in interactive mode, a numbered menu of enrolled fingers
+is presented for selection.
+In non-interactive mode,
+.I finger-name
+is required.
+Use the special name
+.B legacy
+to remove an old single-finger template
+.RI ( username .tpl).
 .SH FINGER NAMES
 Valid finger names:
 .RS
@@ -184,6 +203,30 @@ Interactive enrollment (finger selection menu):
 .RS
 .nf
 sudo sg_enroll alice
+.fi
+.RE
+.PP
+Remove a specific enrolled finger:
+.PP
+.RS
+.nf
+sudo sg_enroll --remove alice right-index
+.fi
+.RE
+.PP
+Remove interactively (choose from a menu):
+.PP
+.RS
+.nf
+sudo sg_enroll --remove alice
+.fi
+.RE
+.PP
+Remove a legacy single-finger template:
+.PP
+.RS
+.nf
+sudo sg_enroll --remove bob legacy
 .fi
 .RE
 .SH SEE ALSO
