@@ -30,6 +30,26 @@
 
 /* ── helpers ──────────────────────────────────────────────── */
 
+#define USERNAME_MAX 256  /* LOGIN_NAME_MAX on Linux */
+
+static int valid_username(const char *name)
+{
+    if (!name || !name[0])
+        return 0;
+
+    size_t len = 0;
+    for (const char *p = name; *p; p++, len++) {
+        char c = *p;
+        int ok = (c >= 'a' && c <= 'z') ||
+                 (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') ||
+                 c == '_' || c == '-' || c == '.';
+        if (!ok)
+            return 0;
+    }
+    return len > 0 && len < USERNAME_MAX;
+}
+
 static int load_template(const char *username, BYTE **tmpl, DWORD *size)
 {
     char path[512];
@@ -61,16 +81,19 @@ static int load_template(const char *username, BYTE **tmpl, DWORD *size)
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                                    int argc, const char **argv)
 {
-    const char *username  = NULL;
-    HSGFPM      hFPM      = NULL;
-    BYTE       *imgBuf    = NULL;
-    BYTE       *liveTmpl  = NULL;
+    (void)flags; (void)argc; (void)argv;
+
+    const char *username   = NULL;
+    HSGFPM      hFPM       = NULL;
+    int         devOpened  = 0;
+    BYTE       *imgBuf     = NULL;
+    BYTE       *liveTmpl   = NULL;
     BYTE       *storedTmpl = NULL;
     DWORD       storedSize = 0;
     DWORD       maxTmplSize = 0;
     DWORD       err;
-    BOOL        matched   = FALSE;
-    int         result    = PAM_AUTH_ERR;
+    BOOL        matched    = FALSE;
+    int         result     = PAM_AUTH_ERR;
     SGDeviceInfoParam devInfo;
 
     /* 1. Resolve PAM username */
@@ -79,7 +102,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         return PAM_AUTH_ERR;
     }
 
-    /* 2. Load enrolled template — fail silently so non-enrolled users
+    /* 2. Validate username — reject path traversal attempts */
+    if (!valid_username(username)) {
+        syslog(LOG_AUTH | LOG_WARNING,
+               "pam_sgfp: invalid username rejected (path traversal?)");
+        return PAM_AUTH_ERR;
+    }
+
+    /* 3. Load enrolled template — fail silently so non-enrolled users
        fall through to password auth via the next PAM rule               */
     if (load_template(username, &storedTmpl, &storedSize) != 0) {
         syslog(LOG_AUTH | LOG_NOTICE,
@@ -87,7 +117,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         return PAM_USER_UNKNOWN;
     }
 
-    /* 3. Initialise SDK */
+    /* 4. Initialise SDK */
     err = SGFPM_Create(&hFPM);
     if (err != SGFDX_ERROR_NONE) {
         syslog(LOG_AUTH | LOG_ERR, "pam_sgfp: SGFPM_Create failed (%lu)", err);
@@ -102,19 +132,29 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 
     SGFPM_SetTemplateFormat(hFPM, TEMPLATE_FORMAT);
 
-    /* 4. Open scanner */
+    /* 5. Open scanner */
     err = SGFPM_OpenDevice(hFPM, USB_AUTO_DETECT);
     if (err != SGFDX_ERROR_NONE) {
         syslog(LOG_AUTH | LOG_ERR,
                "pam_sgfp: SGFPM_OpenDevice failed (%lu) — scanner connected?", err);
         goto cleanup;
     }
+    devOpened = 1;
 
-    /* 5. Query image dimensions */
+    /* 6. Query image dimensions */
     memset(&devInfo, 0, sizeof(devInfo));
     err = SGFPM_GetDeviceInfo(hFPM, &devInfo);
     if (err != SGFDX_ERROR_NONE) {
         syslog(LOG_AUTH | LOG_ERR, "pam_sgfp: GetDeviceInfo failed (%lu)", err);
+        goto cleanup;
+    }
+
+    /* Guard against overflow: U20 is 260x300 = 78000; reject anything absurd */
+    if (devInfo.ImageWidth == 0 || devInfo.ImageHeight == 0 ||
+        devInfo.ImageWidth > 4096 || devInfo.ImageHeight > 4096) {
+        syslog(LOG_AUTH | LOG_ERR,
+               "pam_sgfp: suspicious image dimensions %lux%lu",
+               devInfo.ImageWidth, devInfo.ImageHeight);
         goto cleanup;
     }
 
@@ -127,7 +167,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
 
-    /* 6. Capture fingerprint */
+    /* 7. Capture fingerprint */
     pam_info(pamh, "Place finger on scanner...");
     err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
     if (err != SGFDX_ERROR_NONE) {
@@ -136,7 +176,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         goto cleanup;
     }
 
-    /* 7. Extract minutiae */
+    /* 8. Extract minutiae */
     err = SGFPM_CreateTemplate(hFPM, NULL, imgBuf, liveTmpl);
     if (err != SGFDX_ERROR_NONE) {
         syslog(LOG_AUTH | LOG_NOTICE,
@@ -144,7 +184,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         goto cleanup;
     }
 
-    /* 8. Match against stored template */
+    /* 9. Match against stored template */
     err = SGFPM_MatchTemplate(hFPM, storedTmpl, liveTmpl, SECURITY_LEVEL, &matched);
     if (err == SGFDX_ERROR_NONE && matched) {
         syslog(LOG_AUTH | LOG_INFO,
@@ -158,7 +198,8 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 
 cleanup:
     if (hFPM) {
-        SGFPM_CloseDevice(hFPM);
+        if (devOpened)
+            SGFPM_CloseDevice(hFPM);
         SGFPM_Terminate(hFPM);
     }
     free(imgBuf);
@@ -170,11 +211,13 @@ cleanup:
 PAM_EXTERN int pam_sm_setcred(pam_handle_t *pamh, int flags,
                                int argc, const char **argv)
 {
+    (void)pamh; (void)flags; (void)argc; (void)argv;
     return PAM_SUCCESS;
 }
 
 PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t *pamh, int flags,
                                   int argc, const char **argv)
 {
+    (void)pamh; (void)flags; (void)argc; (void)argv;
     return PAM_SUCCESS;
 }

@@ -20,14 +20,9 @@ CFLAGS = -O2 -fPIC -Wall -Wextra \
          -I$(SGDK_INC) \
          -D__LINUX4
 
-LDFLAGS_PAM = -shared -fPIC \
-              -L$(SGDK_LIB) \
-              -Wl,-rpath,/usr/local/lib \
-              -lsgfplib -lpam
-
-LDFLAGS_ENROLL = -L$(SGDK_LIB) \
-                 -Wl,-rpath,/usr/local/lib \
-                 -lsgfplib
+LDFLAGS_COMMON = -L$(SGDK_LIB) -Wl,-rpath,/usr/local/lib
+LIBS_PAM       = -lsgfplib -lpam
+LIBS_ENROLL    = -lsgfplib
 
 # ── Install paths ─────────────────────────────────────────────────────────────
 PAM_MODULE_DIR = /usr/lib/security
@@ -40,10 +35,10 @@ all: pam_sgfp.so sg_enroll
 
 pam_sgfp.so: pam_sgfp.c
 	$(CC) $(CFLAGS) -c -o pam_sgfp.o pam_sgfp.c
-	$(CC) $(LDFLAGS_PAM) -o pam_sgfp.so pam_sgfp.o
+	$(CC) -shared -fPIC -o pam_sgfp.so pam_sgfp.o $(LDFLAGS_COMMON) $(LIBS_PAM)
 
 sg_enroll: sg_enroll.c
-	$(CC) $(CFLAGS) -o sg_enroll sg_enroll.c $(LDFLAGS_ENROLL)
+	$(CC) $(CFLAGS) -o sg_enroll sg_enroll.c $(LDFLAGS_COMMON) $(LIBS_ENROLL)
 
 # Install SDK shared libraries to /usr/local/lib
 install-sdk:
