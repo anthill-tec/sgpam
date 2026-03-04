@@ -1,5 +1,8 @@
 # SecuGen U20 PAM Integration — Installation Guide
-# Target: CachyOS (Arch Linux x86_64), SDK X64 build
+
+**Version**: [0.1.0](https://github.com/anthill-tec/sgpam/releases/tag/0.1.0)
+
+Target: CachyOS (Arch Linux x86_64), SDK X64 build
 
 ## Files
 
@@ -9,8 +12,8 @@
 | `sg_enroll.c`  | Enrollment CLI — captures and saves a fingerprint template  |
 | `Makefile`     | Builds both, installs SDK libs and binaries                 |
 
-Templates stored at: `/etc/security/sg_fingerprints/<username>.tpl`
-Format: SG400 (400 bytes, AES-encrypted by SDK), root-only (mode 0600).
+Templates stored at: `/etc/security/sg_fingerprints/<username>_<finger>.tpl`
+Format: SG400 (~400 bytes, AES-encrypted by SDK), root-only (mode 0600).
 
 ---
 
@@ -75,12 +78,19 @@ sudo make install SGDK=$SGDK
 ## Step 6 — Enroll your fingerprint
 
 ```fish
-sudo sg_enroll antonyj
+sudo sg_enroll antonyj right-index
 ```
 
 You will be prompted to scan the same finger twice. The tool reports the quality
 score of each capture and the match score between samples. A score ≥ 80/199
 (SL_NORMAL) is required for the enrollment to be saved.
+
+Multiple fingers can be enrolled per user. List and manage them with:
+
+```fish
+sudo sg_enroll --list antonyj
+sudo sg_enroll --remove antonyj right-index
+```
 
 ---
 
@@ -144,8 +154,14 @@ sudo journalctl -f _COMM=sudo | grep pam_sgfp
 
 ```fish
 # Re-enroll (overwrites existing template)
-sudo sg_enroll antonyj
+sudo sg_enroll antonyj right-index
 
-# Remove enrollment
-sudo rm /etc/security/sg_fingerprints/antonyj.tpl
+# Remove a specific finger
+sudo sg_enroll --remove antonyj right-index
+
+# Remove interactively (choose from menu)
+sudo sg_enroll --remove antonyj
+
+# List enrolled fingers
+sudo sg_enroll --list antonyj
 ```
