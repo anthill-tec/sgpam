@@ -1,6 +1,6 @@
 # SecuGen U20 PAM Integration — Installation Guide
 
-**Version**: [0.1.0](https://github.com/anthill-tec/sgpam/releases/tag/0.1.0)
+**Version**: [0.2.0](https://github.com/4property/sgpam/releases/tag/0.2.0)
 
 Target: CachyOS (Arch Linux x86_64), SDK X64 build
 
