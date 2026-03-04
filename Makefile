@@ -11,18 +11,18 @@
 SGDK ?= $(error Set SGDK to the X64 SDK root directory)
 
 # X64 SDK layout
-SGDK_LIB = $(SGDK)/lib/linux4X64
-SGDK_INC = $(SGDK)/include
+SGDK_LIB ?= $(SGDK)/lib/linux4X64
+SGDK_INC ?= $(SGDK)/include
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
 CC     = gcc
-CFLAGS = -O2 -fPIC -Wall -Wextra \
+CFLAGS = -O2 -fPIC -Wall -Wextra -std=gnu11 \
          -I$(SGDK_INC) \
          -D__LINUX4
 
-LDFLAGS_COMMON = -L$(SGDK_LIB) -Wl,-rpath,/usr/local/lib
-LIBS_PAM       = -lsgfplib -lpam
-LIBS_ENROLL    = -lsgfplib
+LDFLAGS_COMMON ?= -L$(SGDK_LIB) -Wl,-rpath,/usr/local/lib
+LIBS_PAM       = -lsgfplib -lstdc++ -lpam
+LIBS_ENROLL    = -lsgfplib -lstdc++
 
 # ── Install paths ─────────────────────────────────────────────────────────────
 PAM_MODULE_DIR = /usr/lib/security

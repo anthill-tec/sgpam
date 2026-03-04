@@ -26,6 +26,12 @@ tests/test_load_template
 tests/test_pam_authenticate
 tests/test_sg_enroll
 
+# makepkg artifacts
+pkg/
+src/
+*.pkg.tar.zst
+*.pkg.tar.xz
+
 # Archives
 *.zip
 *.tar.gz

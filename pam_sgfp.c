@@ -20,6 +20,13 @@
 
 #include "sgfplib.h"
 
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+
 /* ── tunables ─────────────────────────────────────────────── */
 #ifndef TEMPLATE_DIR
 #define TEMPLATE_DIR     "/etc/security/sg_fingerprints"

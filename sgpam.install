@@ -1,0 +1,23 @@
+post_install() {
+    echo ">>> sgpam: SecuGen fingerprint PAM module installed"
+    echo ""
+    echo "  1. Enroll a user's fingerprint:"
+    echo "       sudo sg_enroll <username>"
+    echo ""
+    echo "  2. Add the user to the 'secugen' group:"
+    echo "       sudo usermod -aG secugen <username>"
+    echo ""
+    echo "  3. Enable fingerprint auth in PAM — add before pam_unix.so:"
+    echo ""
+    echo "     /etc/pam.d/sudo:"
+    echo "       auth  sufficient  pam_sgfp.so"
+    echo ""
+    echo "     /etc/pam.d/sddm (or your display manager):"
+    echo "       auth  sufficient  pam_sgfp.so"
+    echo ""
+    echo "  Templates are stored in /etc/security/sg_fingerprints/"
+}
+
+post_upgrade() {
+    post_install
+}
