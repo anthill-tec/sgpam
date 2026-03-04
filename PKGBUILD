@@ -8,6 +8,7 @@ url="https://github.com/4property/sgpam"
 license=('MIT')
 depends=('secugen-fdx-driver' 'pam')
 makedepends=('secugen-fdx-sdk' 'criterion')
+optdepends=('greetd: Wayland-native login manager with fingerprint prompt support')
 install=sgpam.install
 source=()
 
