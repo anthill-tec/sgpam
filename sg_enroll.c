@@ -18,7 +18,9 @@
 #include "sgfplib.h"
 
 /* ── tunables ─────────────────────────────────────────────── */
+#ifndef TEMPLATE_DIR
 #define TEMPLATE_DIR     "/etc/security/sg_fingerprints"
+#endif
 #define DEVICE_NAME      SG_DEV_FDU05
 #define CAPTURE_TIMEOUT  15000
 #define CAPTURE_QUALITY  50               /* higher floor for enrolment */

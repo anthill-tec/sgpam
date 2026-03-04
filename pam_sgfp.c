@@ -21,7 +21,9 @@
 #include "sgfplib.h"
 
 /* ── tunables ─────────────────────────────────────────────── */
+#ifndef TEMPLATE_DIR
 #define TEMPLATE_DIR     "/etc/security/sg_fingerprints"
+#endif
 #define DEVICE_NAME      SG_DEV_FDU05      /* U20 = fdu05 driver  */
 #define CAPTURE_TIMEOUT  10000             /* ms – 10 s           */
 #define CAPTURE_QUALITY  40               /* verification floor  */
