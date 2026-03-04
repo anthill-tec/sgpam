@@ -1,0 +1,24 @@
+# Build artifacts
+*.o
+*.so
+sg_enroll
+
+# SDK / library files
+*.a
+*.dat
+*.lic
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Archives
+*.zip
+*.tar.gz
