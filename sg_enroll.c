@@ -124,12 +124,6 @@ static const char *select_finger(void)
 
 static int list_enrolled_fingers(const char *username)
 {
-    if (access(TEMPLATE_DIR, R_OK) != 0) {
-        fprintf(stderr, "Cannot read %s: %s\n", TEMPLATE_DIR, strerror(errno));
-        fprintf(stderr, "Try: sudo %s --list %s\n", "sg_enroll", username);
-        return 1;
-    }
-
     char pattern[512];
     snprintf(pattern, sizeof(pattern), "%s/%s_*.tpl", TEMPLATE_DIR, username);
 
@@ -179,12 +173,12 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
         "Usage:\n"
         "  sudo %s <username> [finger-name] [-s LEVEL]\n"
-        "  %s --list <username>\n"
+        "  sudo %s --list <username>\n"
         "\n"
         "Options:\n"
         "  -s LEVEL   Security level: lowest, lower, low, below_normal,\n"
         "             normal (default), above_normal, high, higher, highest\n"
-        "  --list     List enrolled fingers (requires sudo)\n"
+        "  --list     List enrolled fingers\n"
         "\n"
         "Finger names:\n"
         "  right-thumb  right-index  right-middle  right-ring  right-little\n"
@@ -231,21 +225,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* Root required for all operations (template dir is 0700) */
+    if (geteuid() != 0) {
+        fprintf(stderr, "Must be run as root: sudo %s ...\n", argv[0]);
+        return 1;
+    }
+
     if (!valid_username(username)) {
         fprintf(stderr, "Invalid username '%s' — "
                 "only alphanumeric, underscore, hyphen, dot allowed\n", username);
         return 1;
     }
 
-    /* --list mode: no root needed */
     if (list_mode)
         return list_enrolled_fingers(username);
-
-    /* Enrollment mode: must be root */
-    if (geteuid() != 0) {
-        fprintf(stderr, "Must be run as root: sudo %s %s\n", argv[0], username);
-        return 1;
-    }
 
     /* Parse security level */
     DWORD securityLevel = DEFAULT_SECURITY;
