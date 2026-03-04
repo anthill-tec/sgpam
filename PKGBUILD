@@ -1,6 +1,6 @@
 # Maintainer: Antony John <antojk@gmail.com>
 pkgname=sgpam
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="PAM fingerprint authentication module for SecuGen U20 reader"
 arch=('x86_64')
@@ -8,12 +8,15 @@ url="https://github.com/4property/sgpam"
 license=('MIT')
 depends=('secugen-fdx-driver' 'pam')
 makedepends=('secugen-fdx-sdk' 'criterion')
-optdepends=('greetd: Wayland-native login manager with fingerprint prompt support')
+optdepends=(
+    'greetd: Wayland-native login manager with fingerprint prompt support'
+    'greetd-regreet: GTK4 greeter for greetd with theming support'
+)
 install=sgpam.install
 source=()
 
 prepare() {
-    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,LICENSE,sg_enroll.1,pam_sgfp.8} "$srcdir/"
+    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,LICENSE,sg_enroll.1,pam_sgfp.8,hyprland.conf} "$srcdir/"
     cp -a "$startdir"/tests "$srcdir/"
 }
 
@@ -39,6 +42,9 @@ package() {
 
     install -Dm644 sg_enroll.1 "$pkgdir/usr/share/man/man1/sg_enroll.1"
     install -Dm644 pam_sgfp.8  "$pkgdir/usr/share/man/man8/pam_sgfp.8"
+
+    # greetd greeter session config (Hyprland wrapper for regreet)
+    install -Dm644 hyprland.conf "$pkgdir/etc/greetd/hyprland.conf"
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
