@@ -56,8 +56,12 @@ post_install() {
         echo "  Detected display manager: GDM"
         echo ""
         configure_pam "GDM login" "/etc/pam.d/gdm-password"
+    elif systemctl is-active --quiet greetd.service; then
+        echo "  Detected display manager: greetd"
+        echo ""
+        configure_pam "greetd login" "/etc/pam.d/greetd"
     else
-        echo "  No supported display manager detected (checked: sddm, gdm)"
+        echo "  No supported display manager detected (checked: sddm, gdm, greetd)"
     fi
 
     configure_pam "sudo" "/etc/pam.d/sudo"
@@ -96,6 +100,7 @@ pre_remove() {
 
     unconfigure_pam "SDDM login" "/etc/pam.d/sddm"
     unconfigure_pam "GDM login" "/etc/pam.d/gdm-password"
+    unconfigure_pam "greetd login" "/etc/pam.d/greetd"
     unconfigure_pam "sudo" "/etc/pam.d/sudo"
     unconfigure_pam "TTY login" "/etc/pam.d/login"
 }

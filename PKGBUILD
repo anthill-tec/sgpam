@@ -1,6 +1,6 @@
 # Maintainer: Antony John <antojk@gmail.com>
 pkgname=sgpam
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="PAM fingerprint authentication module for SecuGen U20 reader"
 arch=('x86_64')
@@ -8,6 +8,7 @@ url="https://github.com/4property/sgpam"
 license=('MIT')
 depends=('secugen-fdx-driver' 'pam')
 makedepends=('secugen-fdx-sdk' 'criterion')
+optdepends=('greetd: Wayland-native login manager with fingerprint prompt support')
 install=sgpam.install
 source=()
 
