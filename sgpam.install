@@ -39,6 +39,69 @@ unconfigure_pam() {
     fi
 }
 
+configure_greetd() {
+    local config="/etc/greetd/config.toml"
+    local regreet="/etc/greetd/regreet.toml"
+
+    # Step 1: Patch config.toml to use start-hyprland wrapper
+    if [ -f "$config" ] && grep -qE 'command\s*=\s*"(agreety|Hyprland)' "$config"; then
+        cp "$config" "${config}.sgpam.bak"
+        sed -i 's|^command\s*=\s*".*"|command = "start-hyprland -- -c /etc/greetd/hyprland.conf"|' "$config"
+        echo "  [done] config.toml updated to use start-hyprland (backup: ${config}.sgpam.bak)"
+    elif [ -f "$config" ]; then
+        echo "  [skip] config.toml — already using start-hyprland or unrecognized format"
+    fi
+
+    # Step 2: Patch regreet.toml with dark theme + greeting
+    if [ -f "$regreet" ]; then
+        cp "$regreet" "${regreet}.sgpam.bak"
+
+        if ! grep -q '^\[GTK\]' "$regreet"; then
+            printf '\n[GTK]\napplication_prefer_dark_theme = true\n' >> "$regreet"
+            echo "  [done] regreet.toml — added dark theme"
+        else
+            echo "  [skip] regreet.toml — [GTK] section already present"
+        fi
+
+        if ! grep -q '^\[appearance\]' "$regreet"; then
+            printf '\n[appearance]\ngreeting_msg = "Welcome — place finger on scanner or enter password"\n' >> "$regreet"
+            echo "  [done] regreet.toml — added fingerprint greeting message"
+        else
+            echo "  [skip] regreet.toml — [appearance] section already present"
+        fi
+    fi
+}
+
+unconfigure_greetd() {
+    local config="/etc/greetd/config.toml"
+    local regreet="/etc/greetd/regreet.toml"
+
+    # Revert config.toml to greetd default
+    if [ -f "$config" ] && grep -q 'start-hyprland' "$config"; then
+        sed -i 's|^command\s*=\s*"start-hyprland.*"|command = "agreety --cmd /bin/sh"|' "$config"
+        echo "  [done] config.toml reverted to agreety default"
+    fi
+
+    # Remove [GTK] and [appearance] sections we appended to regreet.toml
+    if [ -f "$regreet" ]; then
+        if grep -q '^\[GTK\]' "$regreet"; then
+            sed -i '/^\[GTK\]$/,/^$/d' "$regreet"
+            # Clean up the line itself if sed left it
+            sed -i '/^application_prefer_dark_theme/d' "$regreet"
+            echo "  [done] regreet.toml — removed [GTK] section"
+        fi
+
+        if grep -q '^\[appearance\]' "$regreet"; then
+            sed -i '/^\[appearance\]$/,/^$/d' "$regreet"
+            sed -i '/^greeting_msg/d' "$regreet"
+            echo "  [done] regreet.toml — removed [appearance] section"
+        fi
+
+        # Remove trailing blank lines
+        sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$regreet"
+    fi
+}
+
 post_install() {
     echo ">>> sgpam: SecuGen fingerprint PAM module installed"
     echo ""
@@ -60,6 +123,7 @@ post_install() {
         echo "  Detected display manager: greetd"
         echo ""
         configure_pam "greetd login" "/etc/pam.d/greetd"
+        configure_greetd
     else
         echo "  No supported display manager detected (checked: sddm, gdm, greetd)"
     fi
@@ -101,6 +165,7 @@ pre_remove() {
     unconfigure_pam "SDDM login" "/etc/pam.d/sddm"
     unconfigure_pam "GDM login" "/etc/pam.d/gdm-password"
     unconfigure_pam "greetd login" "/etc/pam.d/greetd"
+    unconfigure_greetd
     unconfigure_pam "sudo" "/etc/pam.d/sudo"
     unconfigure_pam "TTY login" "/etc/pam.d/login"
 }
@@ -108,7 +173,7 @@ pre_remove() {
 post_remove() {
     echo ""
     echo ">>> sgpam: Fingerprint authentication has been disabled."
-    echo "    Backup PAM files (*.sgpam.bak) were left in /etc/pam.d/ if needed."
+    echo "    Backup files (*.sgpam.bak) were left in /etc/pam.d/ and /etc/greetd/ if needed."
     echo "    Enrolled fingerprint templates in /etc/security/sg_fingerprints/"
     echo "    were NOT removed — delete manually if desired."
 }
