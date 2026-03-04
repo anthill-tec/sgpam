@@ -92,13 +92,19 @@ load_template(const char *username, BYTE **tmpl, DWORD *size)
  * Load all templates for a user: finger-specific (<user>_*.tpl) + legacy (<user>.tpl)
  * Returns 0 on success (at least one template found), -1 on failure.
  * Caller must free each tmpls[i], then tmpls and sizes arrays.
+ *
+ * If prompt_out is non-NULL, builds a PAM prompt string listing enrolled
+ * finger names (e.g. "Place finger on scanner (right-index, left-thumb)...").
+ * Caller must free *prompt_out.
  */
 static int load_templates(const char *username,
-                          BYTE ***tmpls, DWORD **sizes, int *count)
+                          BYTE ***tmpls, DWORD **sizes, int *count,
+                          char **prompt_out)
 {
     *tmpls = NULL;
     *sizes = NULL;
     *count = 0;
+    if (prompt_out) *prompt_out = NULL;
 
     /* Glob for finger-specific templates: <user>_*.tpl */
     char pattern[512];
@@ -127,6 +133,12 @@ static int load_templates(const char *username,
         return -1;
     }
 
+    /* Build finger names list for prompt */
+    char names_buf[512];
+    int names_pos = 0;
+    names_buf[0] = '\0';
+    size_t ulen = strlen(username);
+
     int loaded = 0;
 
     /* Load finger-specific templates */
@@ -152,6 +164,22 @@ static int load_templates(const char *username,
             (*tmpls)[loaded] = buf;
             (*sizes)[loaded] = sz;
             loaded++;
+
+            /* Extract finger name: <dir>/<user>_<finger>.tpl */
+            if (prompt_out) {
+                const char *base = strrchr(globbuf.gl_pathv[i], '/');
+                base = base ? base + 1 : globbuf.gl_pathv[i];
+                const char *finger = base + ulen + 1;  /* skip "<user>_" */
+                size_t flen = strlen(finger);
+                if (flen > 4) {  /* strip ".tpl" */
+                    int n = snprintf(names_buf + names_pos,
+                                     sizeof(names_buf) - names_pos,
+                                     "%s%.*s",
+                                     names_pos > 0 ? ", " : "",
+                                     (int)(flen - 4), finger);
+                    if (n > 0) names_pos += n;
+                }
+            }
         }
         globfree(&globbuf);
     }
@@ -185,6 +213,18 @@ static int load_templates(const char *username,
         return -1;
     }
 
+    /* Build the prompt string */
+    if (prompt_out) {
+        char prompt[600];
+        if (names_pos > 0)
+            snprintf(prompt, sizeof(prompt),
+                     "Place finger on scanner (%s)...", names_buf);
+        else
+            snprintf(prompt, sizeof(prompt),
+                     "Place finger on scanner...");
+        *prompt_out = strdup(prompt);
+    }
+
     *count = loaded;
     return 0;
 }
@@ -204,6 +244,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     BYTE      **storedTmpls = NULL;
     DWORD      *storedSizes = NULL;
     int         tmplCount   = 0;
+    char       *scanPrompt  = NULL;
     DWORD       maxTmplSize = 0;
     DWORD       err;
     BOOL        matched     = FALSE;
@@ -225,7 +266,8 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 
     /* 3. Load enrolled templates — fail silently so non-enrolled users
        fall through to password auth via the next PAM rule               */
-    if (load_templates(username, &storedTmpls, &storedSizes, &tmplCount) != 0) {
+    if (load_templates(username, &storedTmpls, &storedSizes, &tmplCount,
+                       &scanPrompt) != 0) {
         syslog(LOG_AUTH | LOG_NOTICE,
                "pam_sgfp: no enrolled fingerprint for user '%s'", username);
         return PAM_USER_UNKNOWN;
@@ -282,7 +324,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     if (!liveTmpl) goto cleanup;
 
     /* 7. Capture fingerprint */
-    pam_info(pamh, "Place finger on scanner...");
+    pam_info(pamh, "%s", scanPrompt ? scanPrompt : "Place finger on scanner...");
     err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
     if (err != SGFDX_ERROR_NONE) {
         syslog(LOG_AUTH | LOG_NOTICE,
@@ -329,6 +371,7 @@ cleanup:
         free(storedTmpls[i]);
     free(storedTmpls);
     free(storedSizes);
+    free(scanPrompt);
     return result;
 }
 
