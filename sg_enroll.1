@@ -1,0 +1,235 @@
+.TH SG_ENROLL 1 "2026-03-04" "sgpam 0.1.0" "User Commands"
+.SH NAME
+sg_enroll \- enroll a fingerprint for PAM authentication
+.SH SYNOPSIS
+.B sg_enroll
+.RB [ \-s
+.IR level ]
+.I username
+.RI [ finger-name ]
+.br
+.B sg_enroll \-\-list
+.I username
+.br
+.B sg_enroll \-\-remove
+.I username
+.RI [ finger-name ]
+.SH DESCRIPTION
+.B sg_enroll
+captures two fingerprint samples from a SecuGen U20 reader, verifies
+that they match at the chosen security level, and writes the resulting
+template to
+.IR /etc/security/sg_fingerprints/ username _ finger-name .tpl .
+.PP
+The enrolled template is later used by
+.BR pam_sgfp (8)
+to authenticate the user via fingerprint.
+Multiple fingers can be enrolled per user \(em the PAM module tries all
+templates and accepts the first match.
+.PP
+Each sample is attempted up to three times if the capture fails or
+quality is below the enrolment threshold (60/100).
+After both samples are captured, they are matched at the chosen
+security level to confirm they belong to the same finger.
+.PP
+.B Confidence validation:
+After matching, the raw score (0\(en199) is compared against the
+threshold for the chosen security level.
+If the score is below the threshold and the session is interactive,
+the user is prompted to re-capture for better quality.
+.PP
+.B Post-save verification:
+In interactive mode, after saving the template, a fresh scan is
+captured and matched against the saved file.
+If verification fails, the user can choose to re-enroll.
+.SH OPTIONS
+.TP
+.BI \-s " level"
+Security level for enrollment match confirmation.
+Valid levels (case-insensitive):
+.BR lowest " (30),"
+.BR lower " (50),"
+.BR low " (60),"
+.BR below_normal " (70),"
+.BR normal " (80, default),"
+.BR above_normal " (90),"
+.BR high " (100),"
+.BR higher " (120),"
+.BR highest " (140)."
+The number in parentheses is the minimum match score (out of 199).
+.TP
+.B \-\-list
+List enrolled fingers for the given user.
+Requires root (via
+.BR sudo (8)).
+.TP
+.B \-\-remove
+Remove an enrolled finger template.
+If
+.I finger-name
+is given, the specified template is removed directly.
+If omitted in interactive mode, a numbered menu of enrolled fingers
+is presented for selection.
+In non-interactive mode,
+.I finger-name
+is required.
+Use the special name
+.B legacy
+to remove an old single-finger template
+.RI ( username .tpl).
+.SH FINGER NAMES
+Valid finger names:
+.RS
+.B right-thumb right-index right-middle right-ring right-little
+.br
+.B left-thumb left-index left-middle left-ring left-little
+.RE
+.PP
+If no finger name is given in interactive mode, a numbered menu
+is presented for selection.
+In non-interactive mode (piped input), a finger name is required.
+.SH EXIT STATUS
+.TP
+.B 0
+Enrolment succeeded; template written.
+Also returned by
+.B \-\-list
+(even if no fingers are enrolled).
+.TP
+.B 1
+An error occurred (device not found, quality too low, samples did not
+match, permission denied, invalid finger name, etc.).
+.SH FILES
+.TP
+.I /etc/security/sg_fingerprints/
+Directory holding per-user fingerprint templates.
+Created automatically with mode 0700 if it does not exist.
+.TP
+.IR /etc/security/sg_fingerprints/ username _ finger-name .tpl
+Enrolled template for the specified finger.
+Written with mode 0600, owned by root.
+Uses SecuGen SG400 format (AES-encrypted, approximately 400 bytes).
+.TP
+.IR /etc/security/sg_fingerprints/ username .tpl
+Legacy single-finger template (from versions before multi-finger support).
+Still recognised by
+.BR pam_sgfp (8)
+for backward compatibility.
+.SH SECURITY
+.TP
+.B Root required
+.B sg_enroll
+must be run as root (typically via
+.BR sudo (8)).
+It exits immediately if
+.B euid
+is not 0.
+The
+.B \-\-list
+option does not require root.
+.TP
+.B Umask
+A umask of 0077 is set at startup so that the template directory and
+files are never world-accessible.
+.TP
+.B Path traversal protection
+Usernames are validated against a strict character set
+(alphanumeric, underscore, hyphen, dot; max 255 characters).
+Slashes and other special characters are rejected.
+.TP
+.B Template encryption
+Templates are stored in SG400 format, which applies AES encryption
+within the SecuGen SDK.
+.SH DIAGNOSTICS
+.TP
+.B "SGFPM_OpenDevice \(em is the U20 plugged in?"
+The SecuGen U20 reader was not detected on any USB port.
+.TP
+.B "Quality too low"
+The captured image scored below the enrolment quality threshold (60/100).
+Reposition the finger and try again.
+.TP
+.B "Samples did not match"
+The two captured samples could not be confirmed as the same finger.
+Run
+.B sg_enroll
+again using the same finger for both captures.
+.TP
+.B "Low confidence"
+The match score is below the threshold for the chosen security level.
+The user may re-capture or proceed.
+.TP
+.B "Verification FAILED"
+The post-save verification scan did not match the saved template.
+The user may re-enroll or keep the existing template.
+.TP
+.B "Capture failed"
+The scanner timed out (15 seconds) or the finger was removed too early.
+.TP
+.B "Invalid username"
+The supplied username contained disallowed characters or was empty.
+.TP
+.B "Unknown finger name"
+The supplied finger name is not one of the 10 valid names.
+.SH EXAMPLES
+Enroll user
+.IR alice 's
+right index finger:
+.PP
+.RS
+.nf
+sudo sg_enroll alice right-index
+.fi
+.RE
+.PP
+Enroll with high security (score >= 100):
+.PP
+.RS
+.nf
+sudo sg_enroll -s high alice left-thumb
+.fi
+.RE
+.PP
+List enrolled fingers:
+.PP
+.RS
+.nf
+sudo sg_enroll --list alice
+.fi
+.RE
+.PP
+Interactive enrollment (finger selection menu):
+.PP
+.RS
+.nf
+sudo sg_enroll alice
+.fi
+.RE
+.PP
+Remove a specific enrolled finger:
+.PP
+.RS
+.nf
+sudo sg_enroll --remove alice right-index
+.fi
+.RE
+.PP
+Remove interactively (choose from a menu):
+.PP
+.RS
+.nf
+sudo sg_enroll --remove alice
+.fi
+.RE
+.PP
+Remove a legacy single-finger template:
+.PP
+.RS
+.nf
+sudo sg_enroll --remove bob legacy
+.fi
+.RE
+.SH SEE ALSO
+.BR pam_sgfp (8),
+.BR pam (8),
+.BR pam.d (5)
