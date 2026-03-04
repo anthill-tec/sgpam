@@ -33,11 +33,11 @@ ENROLL_BIN_DIR = /usr/local/bin
 
 all: pam_sgfp.so sg_enroll
 
-pam_sgfp.so: pam_sgfp.c
+pam_sgfp.so: pam_sgfp.c sg_fingers.h
 	$(CC) $(CFLAGS) -c -o pam_sgfp.o pam_sgfp.c
 	$(CC) -shared -fPIC -o pam_sgfp.so pam_sgfp.o $(LDFLAGS_COMMON) $(LIBS_PAM)
 
-sg_enroll: sg_enroll.c
+sg_enroll: sg_enroll.c sg_fingers.h
 	$(CC) $(CFLAGS) -o sg_enroll sg_enroll.c $(LDFLAGS_COMMON) $(LIBS_ENROLL)
 
 # Install SDK shared libraries to /usr/local/lib
@@ -60,7 +60,8 @@ check-arch:
 clean:
 	rm -f pam_sgfp.o pam_sgfp.so sg_enroll
 	rm -f tests/*.o tests/test_valid_username tests/test_load_template \
-	      tests/test_pam_authenticate tests/test_sg_enroll
+	      tests/test_pam_authenticate tests/test_sg_enroll \
+	      tests/test_finger_names tests/test_load_templates
 
 # ── Test framework (Criterion + --wrap mocking) ──────────────────────────────
 
@@ -122,32 +123,49 @@ $(TEST_DIR)/test_pam_authenticate: $(TEST_DIR)/test_pam_authenticate.c pam_sgfp.
 	    $(WRAP_SDK) $(WRAP_PAM) -lcriterion
 
 # 4. Enrollment flow — needs SDK mocks + extra wraps
-$(TEST_DIR)/test_sg_enroll: $(TEST_DIR)/test_sg_enroll.c sg_enroll.c \
+$(TEST_DIR)/test_sg_enroll: $(TEST_DIR)/test_sg_enroll.c sg_enroll.c sg_fingers.h \
                              $(MOCK_SDK_OBJ) $(TEST_DIR)/mock_state.h
 	$(CC) $(TEST_CFLAGS) -Dmain=sg_enroll_main -o $@ $< $(MOCK_SDK_OBJ) \
 	    $(WRAP_SDK) $(WRAP_ENROLL) -lcriterion
 
+# 5. Finger name validation (pure logic, no wraps)
+$(TEST_DIR)/test_finger_names: $(TEST_DIR)/test_finger_names.c sg_fingers.h
+	$(CC) $(TEST_CFLAGS) -o $@ $< -lcriterion
+
+# 6. Multi-template loading
+$(TEST_DIR)/test_load_templates: $(TEST_DIR)/test_load_templates.c pam_sgfp.c sg_fingers.h \
+                                  $(MOCK_SDK_OBJ) $(MOCK_PAM_OBJ) $(TEST_DIR)/mock_state.h
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(MOCK_SDK_OBJ) $(MOCK_PAM_OBJ) \
+	    $(WRAP_SDK) $(WRAP_PAM) -lcriterion
+
 # ── Test runners ──────────────────────────────────────────────────────────────
 
 test: $(TEST_DIR)/test_valid_username $(TEST_DIR)/test_load_template \
-      $(TEST_DIR)/test_pam_authenticate $(TEST_DIR)/test_sg_enroll
+      $(TEST_DIR)/test_pam_authenticate $(TEST_DIR)/test_sg_enroll \
+      $(TEST_DIR)/test_finger_names $(TEST_DIR)/test_load_templates
 	@echo ""; echo "=== Running test suite ==="; echo ""
 	@$(TEST_DIR)/test_valid_username && \
 	 $(TEST_DIR)/test_load_template && \
 	 $(TEST_DIR)/test_pam_authenticate && \
 	 $(TEST_DIR)/test_sg_enroll && \
+	 $(TEST_DIR)/test_finger_names && \
+	 $(TEST_DIR)/test_load_templates && \
 	 echo "" && echo "=== All tests passed ==="
 
 test-verbose: $(TEST_DIR)/test_valid_username $(TEST_DIR)/test_load_template \
-              $(TEST_DIR)/test_pam_authenticate $(TEST_DIR)/test_sg_enroll
+              $(TEST_DIR)/test_pam_authenticate $(TEST_DIR)/test_sg_enroll \
+              $(TEST_DIR)/test_finger_names $(TEST_DIR)/test_load_templates
 	@echo ""; echo "=== Running test suite (verbose) ==="; echo ""
 	$(TEST_DIR)/test_valid_username --verbose
 	$(TEST_DIR)/test_load_template --verbose
 	$(TEST_DIR)/test_pam_authenticate --verbose
 	$(TEST_DIR)/test_sg_enroll --verbose
+	$(TEST_DIR)/test_finger_names --verbose
+	$(TEST_DIR)/test_load_templates --verbose
 	@echo "" && echo "=== All tests passed ==="
 
 test-clean:
 	rm -f $(TEST_DIR)/*.o $(TEST_DIR)/test_valid_username \
 	      $(TEST_DIR)/test_load_template $(TEST_DIR)/test_pam_authenticate \
-	      $(TEST_DIR)/test_sg_enroll
+	      $(TEST_DIR)/test_sg_enroll $(TEST_DIR)/test_finger_names \
+	      $(TEST_DIR)/test_load_templates

@@ -1,23 +1,105 @@
+# sgpam.install — pacman install hooks for SecuGen fingerprint PAM module
+
+configure_pam() {
+    local label="$1"
+    local pam_file="$2"
+
+    # Skip if PAM file doesn't exist
+    [ -f "$pam_file" ] || return 0
+
+    # Skip if already configured
+    if grep -q 'pam_sgfp\.so' "$pam_file"; then
+        echo "  [skip] $label ($pam_file) — already configured"
+        return 0
+    fi
+
+    echo -n "  Configure fingerprint auth for $label? [y/N] " > /dev/tty
+    read -r answer < /dev/tty
+    case "$answer" in
+        [yY]*)
+            cp "$pam_file" "${pam_file}.sgpam.bak"
+            sed -i '0,/^auth[[:space:]]/{/pam_sgfp/!{s/^auth[[:space:]]/auth        sufficient  pam_sgfp.so\n&/}}' "$pam_file"
+            echo "  [done] $label configured (backup: ${pam_file}.sgpam.bak)"
+            ;;
+        *)
+            echo "  [skip] $label — skipped"
+            ;;
+    esac
+}
+
+unconfigure_pam() {
+    local label="$1"
+    local pam_file="$2"
+
+    [ -f "$pam_file" ] || return 0
+
+    if grep -q 'pam_sgfp\.so' "$pam_file"; then
+        sed -i '/^auth[[:space:]].*pam_sgfp\.so/d' "$pam_file"
+        echo "  [done] Removed fingerprint auth from $label"
+    fi
+}
+
 post_install() {
     echo ">>> sgpam: SecuGen fingerprint PAM module installed"
     echo ""
-    echo "  1. Enroll a user's fingerprint:"
-    echo "       sudo sg_enroll <username>"
+    echo "==> Configuring PAM for fingerprint authentication..."
     echo ""
-    echo "  2. Add the user to the 'secugen' group:"
+
+    # Detect active display manager
+    if systemctl is-active --quiet sddm.service; then
+        echo "  Detected display manager: SDDM"
+        echo "  Note: SDDM may not show the fingerprint prompt visually,"
+        echo "        but authentication still works. Just place your finger."
+        echo ""
+        configure_pam "SDDM login" "/etc/pam.d/sddm"
+    elif systemctl is-active --quiet gdm.service; then
+        echo "  Detected display manager: GDM"
+        echo ""
+        configure_pam "GDM login" "/etc/pam.d/gdm-password"
+    else
+        echo "  No supported display manager detected (checked: sddm, gdm)"
+    fi
+
+    configure_pam "sudo" "/etc/pam.d/sudo"
+    configure_pam "TTY login" "/etc/pam.d/login"
+
+    echo ""
+    echo "==> Enrollment instructions:"
+    echo ""
+    echo "  1. Enroll a user's fingerprint:"
+    echo "       sudo sg_enroll <username> <finger-name>"
+    echo "       sudo sg_enroll alice right-index"
+    echo "       sudo sg_enroll -s high alice left-thumb"
+    echo ""
+    echo "  2. List enrolled fingers:"
+    echo "       sg_enroll --list <username>"
+    echo ""
+    echo "  3. Add the user to the 'secugen' group:"
     echo "       sudo usermod -aG secugen <username>"
     echo ""
-    echo "  3. Enable fingerprint auth in PAM — add before pam_unix.so:"
-    echo ""
-    echo "     /etc/pam.d/sudo:"
-    echo "       auth  sufficient  pam_sgfp.so"
-    echo ""
-    echo "     /etc/pam.d/sddm (or your display manager):"
-    echo "       auth  sufficient  pam_sgfp.so"
-    echo ""
     echo "  Templates are stored in /etc/security/sg_fingerprints/"
+    echo ""
+    echo "  See sg_enroll(1) and pam_sgfp(8) for details."
 }
 
 post_upgrade() {
     post_install
+}
+
+pre_remove() {
+    echo ">>> sgpam: Removing fingerprint auth from PAM configuration..."
+    echo ""
+
+    unconfigure_pam "SDDM login" "/etc/pam.d/sddm"
+    unconfigure_pam "GDM login" "/etc/pam.d/gdm-password"
+    unconfigure_pam "sudo" "/etc/pam.d/sudo"
+    unconfigure_pam "TTY login" "/etc/pam.d/login"
+}
+
+post_remove() {
+    echo ""
+    echo ">>> sgpam: Fingerprint authentication has been disabled."
+    echo "    Backup PAM files (*.sgpam.bak) were left in /etc/pam.d/ if needed."
+    echo "    Enrolled fingerprint templates in /etc/security/sg_fingerprints/"
+    echo "    were NOT removed — delete manually if desired."
 }

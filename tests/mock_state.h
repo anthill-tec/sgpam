@@ -47,6 +47,10 @@ typedef struct {
     DWORD   matching_score;        /* written by GetMatchingScore    */
     DWORD   template_size;         /* written by GetTemplateSize     */
 
+    /* ── Per-call match results for multi-template testing ────── */
+    BOOL   *match_results;      /* array, or NULL to use single match_result */
+    int     match_results_len;
+
     /* ── SDK call counters ────────────────────────────────────── */
     int create_count;
     int terminate_count;

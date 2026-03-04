@@ -120,9 +120,14 @@ DWORD __wrap_SGFPM_MatchTemplate(HSGFPM hFPM, BYTE *minTemplate1,
                                   BOOL *matched)
 {
     (void)hFPM; (void)minTemplate1; (void)minTemplate2; (void)secuLevel;
+    int idx = g_mock.match_template_count;
     g_mock.match_template_count++;
-    if (matched)
-        *matched = g_mock.match_result;
+    if (matched) {
+        if (g_mock.match_results && idx < g_mock.match_results_len)
+            *matched = g_mock.match_results[idx];
+        else
+            *matched = g_mock.match_result;
+    }
     return g_mock.match_template_rv;
 }
 

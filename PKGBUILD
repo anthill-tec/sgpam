@@ -12,7 +12,7 @@ install=sgpam.install
 source=()
 
 prepare() {
-    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,LICENSE,sg_enroll.1,pam_sgfp.8} "$srcdir/"
+    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,LICENSE,sg_enroll.1,pam_sgfp.8} "$srcdir/"
     cp -a "$startdir"/tests "$srcdir/"
 }
 

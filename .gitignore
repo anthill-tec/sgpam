@@ -25,6 +25,8 @@ tests/test_valid_username
 tests/test_load_template
 tests/test_pam_authenticate
 tests/test_sg_enroll
+tests/test_finger_names
+tests/test_load_templates
 
 # makepkg artifacts
 pkg/

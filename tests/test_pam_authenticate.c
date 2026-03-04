@@ -48,11 +48,25 @@ static void teardown(void)
     system(cmd);
 }
 
-/* Write a fake template file for the given username */
+/* Write a fake template file for the given username (legacy format) */
 static void write_template(const char *username, size_t size)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s.tpl", test_template_dir, username);
+    FILE *f = fopen(path, "wb");
+    BYTE *data = calloc(1, size);
+    fwrite(data, 1, size, f);
+    free(data);
+    fclose(f);
+}
+
+/* Write a finger-specific template file */
+static void write_finger_template(const char *username, const char *finger,
+                                   size_t size)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s_%s.tpl", test_template_dir,
+             username, finger);
     FILE *f = fopen(path, "wb");
     BYTE *data = calloc(1, size);
     fwrite(data, 1, size, f);
@@ -200,4 +214,74 @@ Test(pam_authenticate, oversized_dimensions_rejected, .init = setup,
 
     int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
     cr_assert_eq(rc, PAM_AUTH_ERR);
+}
+
+/* ── Multi-template tests ────────────────────────────────── */
+
+Test(pam_authenticate, multi_template_first_matches, .init = setup,
+     .fini = teardown)
+{
+    write_finger_template("testuser", "right-index", 400);
+    write_finger_template("testuser", "left-thumb", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.match_template_count, 1,
+                 "should stop after first match");
+}
+
+Test(pam_authenticate, multi_template_second_matches, .init = setup,
+     .fini = teardown)
+{
+    write_finger_template("testuser", "right-index", 400);
+    write_finger_template("testuser", "left-thumb", 400);
+
+    /* First template doesn't match, second does */
+    BOOL results[] = {FALSE, TRUE};
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.match_template_count, 2,
+                 "should try both templates");
+}
+
+Test(pam_authenticate, multi_template_none_match, .init = setup,
+     .fini = teardown)
+{
+    write_finger_template("testuser", "right-index", 400);
+    write_finger_template("testuser", "left-thumb", 400);
+    g_mock.match_result = FALSE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.match_template_count, 2,
+                 "should try all templates before failing");
+}
+
+Test(pam_authenticate, legacy_template_still_works, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+}
+
+Test(pam_authenticate, mixed_legacy_and_finger, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    write_finger_template("testuser", "right-index", 400);
+
+    /* Legacy doesn't match (or finger-specific comes first), second matches */
+    BOOL results[] = {FALSE, TRUE};
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
 }

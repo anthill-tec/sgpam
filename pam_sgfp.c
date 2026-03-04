@@ -17,6 +17,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <glob.h>
 
 #include "sgfplib.h"
 
@@ -34,7 +35,7 @@
 #define DEVICE_NAME      SG_DEV_FDU05      /* U20 = fdu05 driver  */
 #define CAPTURE_TIMEOUT  10000             /* ms – 10 s           */
 #define CAPTURE_QUALITY  40               /* verification floor  */
-#define SECURITY_LEVEL   SL_ABOVE_NORMAL  /* score ≥ 90          */
+#define SECURITY_LEVEL   SL_NORMAL        /* score ≥ 80 (SDK recommended) */
 #define TEMPLATE_FORMAT  TEMPLATE_FORMAT_SG400  /* 400 B, encrypted */
 
 /* ── helpers ──────────────────────────────────────────────── */
@@ -59,7 +60,9 @@ static int valid_username(const char *name)
     return len > 0 && len < USERNAME_MAX;
 }
 
-static int load_template(const char *username, BYTE **tmpl, DWORD *size)
+/* Kept for backward compatibility with test_load_template.c */
+static int __attribute__((unused))
+load_template(const char *username, BYTE **tmpl, DWORD *size)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s.tpl", TEMPLATE_DIR, username);
@@ -85,6 +88,107 @@ static int load_template(const char *username, BYTE **tmpl, DWORD *size)
     return 0;
 }
 
+/*
+ * Load all templates for a user: finger-specific (<user>_*.tpl) + legacy (<user>.tpl)
+ * Returns 0 on success (at least one template found), -1 on failure.
+ * Caller must free each tmpls[i], then tmpls and sizes arrays.
+ */
+static int load_templates(const char *username,
+                          BYTE ***tmpls, DWORD **sizes, int *count)
+{
+    *tmpls = NULL;
+    *sizes = NULL;
+    *count = 0;
+
+    /* Glob for finger-specific templates: <user>_*.tpl */
+    char pattern[512];
+    snprintf(pattern, sizeof(pattern), "%s/%s_*.tpl", TEMPLATE_DIR, username);
+
+    glob_t globbuf;
+    int grc = glob(pattern, 0, NULL, &globbuf);
+
+    /* Also check for legacy template: <user>.tpl */
+    char legacy_path[512];
+    snprintf(legacy_path, sizeof(legacy_path), "%s/%s.tpl", TEMPLATE_DIR, username);
+    int has_legacy = (access(legacy_path, R_OK) == 0);
+
+    int total = (grc == 0 ? (int)globbuf.gl_pathc : 0) + (has_legacy ? 1 : 0);
+    if (total == 0) {
+        if (grc == 0) globfree(&globbuf);
+        return -1;
+    }
+
+    *tmpls = calloc(total, sizeof(BYTE *));
+    *sizes = calloc(total, sizeof(DWORD));
+    if (!*tmpls || !*sizes) {
+        free(*tmpls); free(*sizes);
+        *tmpls = NULL; *sizes = NULL;
+        if (grc == 0) globfree(&globbuf);
+        return -1;
+    }
+
+    int loaded = 0;
+
+    /* Load finger-specific templates */
+    if (grc == 0) {
+        for (size_t i = 0; i < globbuf.gl_pathc; i++) {
+            FILE *f = fopen(globbuf.gl_pathv[i], "rb");
+            if (!f) continue;
+
+            fseek(f, 0, SEEK_END);
+            DWORD sz = (DWORD)ftell(f);
+            rewind(f);
+
+            if (sz == 0) { fclose(f); continue; }
+
+            BYTE *buf = malloc(sz);
+            if (!buf) { fclose(f); continue; }
+
+            if (fread(buf, 1, sz, f) != sz) {
+                free(buf); fclose(f); continue;
+            }
+            fclose(f);
+
+            (*tmpls)[loaded] = buf;
+            (*sizes)[loaded] = sz;
+            loaded++;
+        }
+        globfree(&globbuf);
+    }
+
+    /* Load legacy template */
+    if (has_legacy) {
+        FILE *f = fopen(legacy_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            DWORD sz = (DWORD)ftell(f);
+            rewind(f);
+
+            if (sz > 0) {
+                BYTE *buf = malloc(sz);
+                if (buf && fread(buf, 1, sz, f) == sz) {
+                    (*tmpls)[loaded] = buf;
+                    (*sizes)[loaded] = sz;
+                    loaded++;
+                } else {
+                    free(buf);
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    if (loaded == 0) {
+        free(*tmpls); free(*sizes);
+        *tmpls = NULL; *sizes = NULL;
+        *count = 0;
+        return -1;
+    }
+
+    *count = loaded;
+    return 0;
+}
+
 /* ── PAM entry points ─────────────────────────────────────── */
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
@@ -92,17 +196,18 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 {
     (void)flags; (void)argc; (void)argv;
 
-    const char *username   = NULL;
-    HSGFPM      hFPM       = NULL;
-    int         devOpened  = 0;
-    BYTE       *imgBuf     = NULL;
-    BYTE       *liveTmpl   = NULL;
-    BYTE       *storedTmpl = NULL;
-    DWORD       storedSize = 0;
+    const char *username    = NULL;
+    HSGFPM      hFPM        = NULL;
+    int         devOpened   = 0;
+    BYTE       *imgBuf      = NULL;
+    BYTE       *liveTmpl    = NULL;
+    BYTE      **storedTmpls = NULL;
+    DWORD      *storedSizes = NULL;
+    int         tmplCount   = 0;
     DWORD       maxTmplSize = 0;
     DWORD       err;
-    BOOL        matched    = FALSE;
-    int         result     = PAM_AUTH_ERR;
+    BOOL        matched     = FALSE;
+    int         result      = PAM_AUTH_ERR;
     SGDeviceInfoParam devInfo;
 
     /* 1. Resolve PAM username */
@@ -118,9 +223,9 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         return PAM_AUTH_ERR;
     }
 
-    /* 3. Load enrolled template — fail silently so non-enrolled users
+    /* 3. Load enrolled templates — fail silently so non-enrolled users
        fall through to password auth via the next PAM rule               */
-    if (load_template(username, &storedTmpl, &storedSize) != 0) {
+    if (load_templates(username, &storedTmpls, &storedSizes, &tmplCount) != 0) {
         syslog(LOG_AUTH | LOG_NOTICE,
                "pam_sgfp: no enrolled fingerprint for user '%s'", username);
         return PAM_USER_UNKNOWN;
@@ -193,16 +298,23 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         goto cleanup;
     }
 
-    /* 9. Match against stored template */
-    err = SGFPM_MatchTemplate(hFPM, storedTmpl, liveTmpl, SECURITY_LEVEL, &matched);
-    if (err == SGFDX_ERROR_NONE && matched) {
-        syslog(LOG_AUTH | LOG_INFO,
-               "pam_sgfp: fingerprint accepted for user '%s'", username);
-        result = PAM_SUCCESS;
-    } else {
+    /* 9. Match against stored templates — first match wins */
+    for (int i = 0; i < tmplCount; i++) {
+        matched = FALSE;
+        err = SGFPM_MatchTemplate(hFPM, storedTmpls[i], liveTmpl,
+                                  SECURITY_LEVEL, &matched);
+        if (err == SGFDX_ERROR_NONE && matched) {
+            syslog(LOG_AUTH | LOG_INFO,
+                   "pam_sgfp: fingerprint accepted for user '%s' "
+                   "(template %d/%d)", username, i + 1, tmplCount);
+            result = PAM_SUCCESS;
+            break;
+        }
+    }
+    if (result != PAM_SUCCESS) {
         syslog(LOG_AUTH | LOG_NOTICE,
-               "pam_sgfp: fingerprint rejected for user '%s' (err=%lu matched=%d)",
-               username, err, matched);
+               "pam_sgfp: fingerprint rejected for user '%s' "
+               "(%d templates tried)", username, tmplCount);
     }
 
 cleanup:
@@ -213,7 +325,10 @@ cleanup:
     }
     free(imgBuf);
     free(liveTmpl);
-    free(storedTmpl);
+    for (int i = 0; i < tmplCount; i++)
+        free(storedTmpls[i]);
+    free(storedTmpls);
+    free(storedSizes);
     return result;
 }
 

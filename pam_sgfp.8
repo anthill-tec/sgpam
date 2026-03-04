@@ -8,12 +8,21 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .SH DESCRIPTION
 .B pam_sgfp
 is a PAM authentication module that captures a live fingerprint from
-a SecuGen U20 reader and matches it against a template previously
+a SecuGen U20 reader and matches it against templates previously
 enrolled with
 .BR sg_enroll (1).
 .PP
-Templates are read from
-.IR /etc/security/sg_fingerprints/ username .tpl .
+The module supports multi-finger enrollment: all templates for a user
+are loaded and tried in sequence.
+Authentication succeeds on the first matching template.
+.PP
+Templates are discovered by glob pattern:
+.IR /etc/security/sg_fingerprints/ username _*.tpl
+(finger-specific templates) and
+.IR /etc/security/sg_fingerprints/ username .tpl
+(legacy single-finger template).
+Both formats are supported for backward compatibility.
+.PP
 If no template exists for the authenticating user, the module returns
 .B PAM_USER_UNKNOWN
 so that a subsequent PAM rule (typically password authentication) can
@@ -27,19 +36,19 @@ The module prompts
 via the PAM conversation function, then captures with a 10-second
 timeout.
 Matching uses security level
-.B SL_ABOVE_NORMAL
-(match score >= 90/199).
+.B SL_NORMAL
+(match score >= 80/199).
 .SH MODULE TYPES PROVIDED
 .B auth
 .SH RETURN VALUES
 .TP
 .B PAM_SUCCESS
-The live fingerprint matched the enrolled template.
+The live fingerprint matched an enrolled template.
 .TP
 .B PAM_AUTH_ERR
 Authentication failed.
-This covers: match failure, capture timeout, SDK initialisation
-errors, device not found, or invalid username.
+This covers: match failure against all templates, capture timeout,
+SDK initialisation errors, device not found, or invalid username.
 .TP
 .B PAM_USER_UNKNOWN
 No enrolled template was found for the user.
@@ -56,16 +65,20 @@ The shared library installed by the package.
 .I /etc/security/sg_fingerprints/
 Directory containing per-user fingerprint templates (mode 0700, root only).
 .TP
+.IR /etc/security/sg_fingerprints/ username _ finger-name .tpl
+Enrolled template for a specific finger (e.g.,
+.IR alice_right-index.tpl ).
+Mode 0600.
+.TP
 .IR /etc/security/sg_fingerprints/ username .tpl
-Enrolled template for
-.IR username
-(mode 0600).
+Legacy single-finger template.
+Still recognised for backward compatibility.
 .SH SECURITY
 .TP
 .B Match threshold
 Uses
-.B SL_ABOVE_NORMAL
-security level, requiring a match score of at least 90 out of 199.
+.B SL_NORMAL
+security level, requiring a match score of at least 80 out of 199.
 .TP
 .B Template format
 Templates use SecuGen SG400 format with AES encryption.
@@ -87,13 +100,14 @@ All messages are logged via
 with facility
 .BR LOG_AUTH .
 .TP
-.B "pam_sgfp: fingerprint accepted for user \(aq%s\(aq"
+.B "pam_sgfp: fingerprint accepted for user \(aq%s\(aq (template %d/%d)"
 .RB ( LOG_INFO )
 Authentication succeeded.
+The template index indicates which enrolled finger matched.
 .TP
-.B "pam_sgfp: fingerprint rejected for user \(aq%s\(aq"
+.B "pam_sgfp: fingerprint rejected for user \(aq%s\(aq (%d templates tried)"
 .RB ( LOG_NOTICE )
-The live fingerprint did not match the enrolled template.
+The live fingerprint did not match any enrolled template.
 .TP
 .B "pam_sgfp: no enrolled fingerprint for user \(aq%s\(aq"
 .RB ( LOG_NOTICE )
