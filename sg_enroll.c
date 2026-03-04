@@ -124,6 +124,12 @@ static const char *select_finger(void)
 
 static int list_enrolled_fingers(const char *username)
 {
+    if (access(TEMPLATE_DIR, R_OK) != 0) {
+        fprintf(stderr, "Cannot read %s: %s\n", TEMPLATE_DIR, strerror(errno));
+        fprintf(stderr, "Try: sudo %s --list %s\n", "sg_enroll", username);
+        return 1;
+    }
+
     char pattern[512];
     snprintf(pattern, sizeof(pattern), "%s/%s_*.tpl", TEMPLATE_DIR, username);
 
@@ -178,7 +184,7 @@ static void print_usage(const char *argv0)
         "Options:\n"
         "  -s LEVEL   Security level: lowest, lower, low, below_normal,\n"
         "             normal (default), above_normal, high, higher, highest\n"
-        "  --list     List enrolled fingers (no root required)\n"
+        "  --list     List enrolled fingers (requires sudo)\n"
         "\n"
         "Finger names:\n"
         "  right-thumb  right-index  right-middle  right-ring  right-little\n"

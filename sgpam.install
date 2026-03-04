@@ -72,7 +72,7 @@ post_install() {
     echo "       sudo sg_enroll -s high alice left-thumb"
     echo ""
     echo "  2. List enrolled fingers:"
-    echo "       sg_enroll --list <username>"
+    echo "       sudo sg_enroll --list <username>"
     echo ""
     echo "  3. Add the user to the 'secugen' group:"
     echo "       sudo usermod -aG secugen <username>"

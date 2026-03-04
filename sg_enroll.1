@@ -56,7 +56,7 @@ The number in parentheses is the minimum match score (out of 199).
 .TP
 .B \-\-list
 List enrolled fingers for the given user.
-Does not require root.
+Requires read access to the template directory (typically root).
 .SH FINGER NAMES
 Valid finger names:
 .RS
@@ -174,7 +174,7 @@ List enrolled fingers:
 .PP
 .RS
 .nf
-sg_enroll --list alice
+sudo sg_enroll --list alice
 .fi
 .RE
 .PP
