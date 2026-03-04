@@ -31,10 +31,13 @@ This enables a graceful fallback: enrolled users authenticate by
 fingerprint, while unenrolled users are silently passed through to
 password.
 .PP
-The module prompts
+The module prompts via the PAM conversation function with the names
+of enrolled fingers, for example:
+.RB \(lq "Place finger on scanner (right-index, left-thumb)..." \(rq.
+For legacy single-finger templates the generic prompt
 .RB \(lq "Place finger on scanner..." \(rq
-via the PAM conversation function, then captures with a 10-second
-timeout.
+is shown instead.
+Capture uses a 10-second timeout.
 Matching uses security level
 .B SL_NORMAL
 (match score >= 80/199).
