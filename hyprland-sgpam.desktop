@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Hyprland (sgpam)
+Comment=Hyprland with DRM blanking between sessions
+Exec=/usr/bin/sgpam-start-hyprland
+Type=Application
+DesktopNames=Hyprland
+Keywords=tiling;wayland;compositor;

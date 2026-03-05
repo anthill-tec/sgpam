@@ -124,6 +124,10 @@ post_install() {
         echo ""
         configure_pam "greetd login" "/etc/pam.d/greetd"
         configure_greetd
+        echo ""
+        echo "  Note: Two new sessions are available in the ReGreet session picker:"
+        echo "    - Hyprland (sgpam)          — blanks screen between greeter and desktop"
+        echo "    - Hyprland (uwsm + sgpam)   — same, with uwsm session management"
     else
         echo "  No supported display manager detected (checked: sddm, gdm, greetd)"
     fi

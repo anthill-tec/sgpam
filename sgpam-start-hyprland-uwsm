@@ -1,0 +1,21 @@
+#!/bin/sh
+# sgpam-start-hyprland-uwsm — blank screen via DRM, then launch Hyprland via uwsm
+# Usage: sgpam-start-hyprland-uwsm [--verbose|-v] [uwsm args...]
+
+VERBOSE=0
+ARGS=""
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+        *) ARGS="$ARGS $arg" ;;
+    esac
+done
+
+if [ "$VERBOSE" -eq 1 ]; then
+    echo "sgpam: blanking DRM displays (verbose)..." >&2
+    sg-drm-blank --verbose
+    echo "sgpam: launching uwsm start -e -D Hyprland hyprland.desktop$ARGS" >&2
+else
+    sg-drm-blank
+fi
+exec uwsm start -e -D Hyprland hyprland.desktop $ARGS
