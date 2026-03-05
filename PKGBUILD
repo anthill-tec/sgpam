@@ -11,12 +11,13 @@ makedepends=('secugen-fdx-sdk' 'criterion' 'libdrm')
 optdepends=(
     'greetd: Wayland-native login manager with fingerprint prompt support'
     'greetd-regreet: GTK4 greeter for greetd with theming support'
+    'hyprland: Wayland compositor for sgpam session wrappers'
 )
 install=sgpam.install
 source=()
 
 prepare() {
-    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,sg-drm-blank.c,LICENSE,sg_enroll.1,pam_sgfp.8,hyprland.conf} "$srcdir/"
+    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,sg-drm-blank.c,LICENSE,sg_enroll.1,pam_sgfp.8,hyprland.conf,sgpam-start-hyprland,sgpam-start-hyprland-uwsm,hyprland-sgpam.desktop,hyprland-uwsm-sgpam.desktop} "$srcdir/"
     cp -a "$startdir"/tests "$srcdir/"
 }
 
@@ -46,6 +47,12 @@ package() {
 
     # greetd greeter session config (Hyprland wrapper for regreet)
     install -Dm644 hyprland.conf "$pkgdir/etc/greetd/hyprland.conf"
+
+    # Wayland session wrappers (DRM blanking between greeter and desktop)
+    install -Dm755 sgpam-start-hyprland      "$pkgdir/usr/bin/sgpam-start-hyprland"
+    install -Dm755 sgpam-start-hyprland-uwsm "$pkgdir/usr/bin/sgpam-start-hyprland-uwsm"
+    install -Dm644 hyprland-sgpam.desktop      "$pkgdir/usr/share/wayland-sessions/hyprland-sgpam.desktop"
+    install -Dm644 hyprland-uwsm-sgpam.desktop "$pkgdir/usr/share/wayland-sessions/hyprland-uwsm-sgpam.desktop"
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

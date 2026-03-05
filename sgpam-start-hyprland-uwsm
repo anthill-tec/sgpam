@@ -1,0 +1,3 @@
+#!/bin/sh
+sg-drm-blank
+exec uwsm start -e -D Hyprland hyprland.desktop "$@"
