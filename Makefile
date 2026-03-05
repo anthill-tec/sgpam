@@ -33,7 +33,7 @@ PAM_MODULE_DIR = /usr/lib/security
 ENROLL_BIN_DIR = /usr/local/bin
 
 # ── Targets ───────────────────────────────────────────────────────────────────
-.PHONY: all clean install install-sdk check-arch test test-verbose test-clean
+.PHONY: all clean install install-sdk check-arch test test-verbose test-clean test-vkms
 
 all: pam_sgfp.so sg_enroll sg-drm-blank
 
@@ -70,7 +70,7 @@ clean:
 	rm -f tests/*.o tests/test_valid_username tests/test_load_template \
 	      tests/test_pam_authenticate tests/test_sg_enroll \
 	      tests/test_finger_names tests/test_load_templates \
-	      tests/test_drm_blank
+	      tests/test_drm_blank tests/test_drm_blank_vkms
 
 # ── Test framework (Criterion + --wrap mocking) ──────────────────────────────
 
@@ -171,6 +171,10 @@ $(TEST_DIR)/test_drm_blank: $(TEST_DIR)/test_drm_blank.c sg-drm-blank.c \
 	$(CC) $(DRM_TEST_CFLAGS) -Dmain=sg_drm_blank_main -o $@ $< $(MOCK_DRM_OBJ) \
 	    $(WRAP_DRM_SYS) $(WRAP_DRM_LIB) $(DRM_LIBS) -lcriterion
 
+# 8. VKMS integration test (requires: sudo modprobe vkms + root)
+$(TEST_DIR)/test_drm_blank_vkms: $(TEST_DIR)/test_drm_blank_vkms.c sg-drm-blank.c
+	$(CC) $(DRM_TEST_CFLAGS) -Dmain=sg_drm_blank_main -o $@ $< $(DRM_LIBS) -lcriterion
+
 # ── Test runners ──────────────────────────────────────────────────────────────
 
 test: $(TEST_DIR)/test_valid_username $(TEST_DIR)/test_load_template \
@@ -201,8 +205,13 @@ test-verbose: $(TEST_DIR)/test_valid_username $(TEST_DIR)/test_load_template \
 	$(TEST_DIR)/test_drm_blank --verbose
 	@echo "" && echo "=== All tests passed ==="
 
+test-vkms: $(TEST_DIR)/test_drm_blank_vkms
+	@echo "=== VKMS integration test (requires: sudo modprobe vkms + root) ==="
+	$(TEST_DIR)/test_drm_blank_vkms -j1 --verbose
+
 test-clean:
 	rm -f $(TEST_DIR)/*.o $(TEST_DIR)/test_valid_username \
 	      $(TEST_DIR)/test_load_template $(TEST_DIR)/test_pam_authenticate \
 	      $(TEST_DIR)/test_sg_enroll $(TEST_DIR)/test_finger_names \
-	      $(TEST_DIR)/test_load_templates $(TEST_DIR)/test_drm_blank
+	      $(TEST_DIR)/test_load_templates $(TEST_DIR)/test_drm_blank \
+	      $(TEST_DIR)/test_drm_blank_vkms

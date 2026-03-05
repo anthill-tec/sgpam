@@ -10,6 +10,8 @@
  * Usage:
  *   sg-drm-blank                   — auto-detect all DRM devices
  *   sg-drm-blank /dev/dri/card0    — target a specific device
+ *   sg-drm-blank -v                — verbose logging for debugging
+ *   sg-drm-blank --verbose /dev/dri/card0
  */
 
 #include <stdio.h>
@@ -22,6 +24,10 @@
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+
+static int verbose = 0;
+
+#define VLOG(...) do { if (verbose) fprintf(stderr, __VA_ARGS__); } while (0)
 
 /* ── dumb buffer + framebuffer ───────────────────────────────────────────── */
 
@@ -93,26 +99,37 @@ static int blank_device(const char *path)
                 path, strerror(errno));
         return -1;
     }
+    VLOG("  open OK fd=%d path=%s\n", fd, path);
 
     /* Must be DRM master — only possible when no compositor is running */
     if (drmSetMaster(fd) < 0) {
+        VLOG("  drmSetMaster FAILED: %s\n", strerror(errno));
         /* Not an error if device is in use by another compositor */
         close(fd);
         return 0;
     }
+    VLOG("  drmSetMaster OK\n");
 
     drmModeRes *res = drmModeGetResources(fd);
     if (!res) {
+        VLOG("  GetResources FAILED\n");
         drmDropMaster(fd);
         close(fd);
         return -1;
     }
+    VLOG("  GetResources OK, %d CRTCs\n", res->count_crtcs);
 
     int blanked = 0;
 
     for (int i = 0; i < res->count_crtcs; i++) {
         drmModeCrtc *crtc = drmModeGetCrtc(fd, res->crtcs[i]);
-        if (!crtc) continue;
+        if (!crtc) {
+            VLOG("  GetCrtc[%d] NULL\n", i);
+            continue;
+        }
+        VLOG("  CRTC[%d] id=%u valid=%d %ux%u\n",
+             i, crtc->crtc_id, crtc->mode_valid,
+             crtc->mode.hdisplay, crtc->mode.vdisplay);
 
         if (!crtc->mode_valid || crtc->mode.hdisplay == 0) {
             drmModeFreeCrtc(crtc);
@@ -124,14 +141,41 @@ static int blank_device(const char *path)
 
         BlackFB fb = {0};
         if (create_black_fb(fd, w, h, &fb) < 0) {
+            VLOG("  create_black_fb FAILED\n");
             destroy_fb(fd, &fb);   /* clean up partial allocation */
             drmModeFreeCrtc(crtc);
             continue;
         }
+        VLOG("  create_black_fb OK fb_id=%u\n", fb.fb_id);
 
-        if (drmModeSetCrtc(fd, crtc->crtc_id, fb.fb_id,
-                           0, 0, NULL, 0, &crtc->mode) == 0) {
+        /* Look up connectors bound to this CRTC via encoders.
+         * Some drivers (e.g. VKMS) require connectors to be passed. */
+        uint32_t conn_ids[16];
+        int conn_count = 0;
+        for (int j = 0; j < res->count_connectors && conn_count < 16; j++) {
+            drmModeConnector *conn = drmModeGetConnector(fd, res->connectors[j]);
+            if (!conn) continue;
+            if (conn->encoder_id) {
+                drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoder_id);
+                if (enc) {
+                    if (enc->crtc_id == crtc->crtc_id)
+                        conn_ids[conn_count++] = conn->connector_id;
+                    drmModeFreeEncoder(enc);
+                }
+            }
+            drmModeFreeConnector(conn);
+        }
+        VLOG("  found %d connectors for CRTC %u\n", conn_count, crtc->crtc_id);
+
+        if (drmModeSetCrtc(fd, crtc->crtc_id, fb.fb_id, 0, 0,
+                           conn_count > 0 ? conn_ids : NULL,
+                           conn_count, &crtc->mode) == 0) {
             blanked++;
+            VLOG("  SetCrtc OK blanked=%d\n", blanked);
+        } else {
+            fprintf(stderr, "sg-drm-blank: SetCrtc failed on CRTC %u: %s "
+                    "(non-fatal, compositor will handle display)\n",
+                    crtc->crtc_id, strerror(errno));
         }
 
         /* Hold black frame briefly so display settles before handoff */
@@ -145,6 +189,7 @@ static int blank_device(const char *path)
     drmDropMaster(fd);
     close(fd);
 
+    VLOG("  returning %d\n", blanked);
     return blanked;
 }
 
@@ -152,34 +197,33 @@ static int blank_device(const char *path)
 
 int main(int argc, char *argv[])
 {
+    const char *device_path = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0)
+            verbose = 1;
+        else
+            device_path = argv[i];
+    }
+
     /* Explicit device path provided */
-    if (argc > 1) {
-        int ret = blank_device(argv[1]);
-        return (ret > 0) ? 0 : 1;
+    if (device_path) {
+        blank_device(device_path);
+        return 0;   /* best-effort: never block boot */
     }
 
     /* Auto-enumerate all DRM devices */
     drmDevicePtr devices[16];
     int n = drmGetDevices2(0, devices, 16);
-    if (n <= 0) {
-        fprintf(stderr, "sg-drm-blank: no DRM devices found\n");
-        return 1;
-    }
-
-    int total_blanked = 0;
+    if (n <= 0)
+        return 0;   /* no devices is fine — compositor will handle display */
 
     for (int i = 0; i < n; i++) {
-        /* Only process primary nodes (card0, card1, etc.) */
         if (!(devices[i]->available_nodes & (1 << DRM_NODE_PRIMARY)))
             continue;
-
-        const char *path = devices[i]->nodes[DRM_NODE_PRIMARY];
-        int ret = blank_device(path);
-        if (ret > 0)
-            total_blanked += ret;
+        blank_device(devices[i]->nodes[DRM_NODE_PRIMARY]);
     }
 
     drmFreeDevices(devices, n);
-
-    return (total_blanked > 0) ? 0 : 1;
+    return 0;
 }
