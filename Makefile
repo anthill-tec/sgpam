@@ -12,15 +12,15 @@ SGDK ?= $(error Set SGDK to the X64 SDK root directory)
 
 # X64 SDK layout
 SGDK_LIB ?= $(SGDK)/lib/linux4X64
-SGDK_INC ?= $(SGDK_LIB)
+SGDK_INC ?= $(SGDK)/include
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
 CC     = gcc
 CFLAGS = -O2 -fPIC -Wall -Wextra -std=gnu11 \
-         -I$(SGDK_INC) \
+         '-I$(SGDK_INC)' \
          -D__LINUX4
 
-LDFLAGS_COMMON ?= -L$(SGDK_LIB) -Wl,-rpath,/usr/local/lib
+LDFLAGS_COMMON ?= '-L$(SGDK_LIB)' -Wl,-rpath,/usr/local/lib
 LIBS_PAM       = -lsgfplib -lstdc++ -lpam
 LIBS_ENROLL    = -lsgfplib -lstdc++
 
@@ -33,7 +33,7 @@ PAM_MODULE_DIR = /usr/lib/security
 ENROLL_BIN_DIR = /usr/local/bin
 
 # ── Targets ───────────────────────────────────────────────────────────────────
-.PHONY: all clean install install-sdk check-arch test test-verbose test-clean test-vkms
+.PHONY: all clean install install-sdk uninstall-sdk check-arch test test-verbose test-clean test-vkms
 
 all: pam_sgfp.so sg_enroll sg-drm-blank
 
@@ -47,9 +47,20 @@ sg_enroll: sg_enroll.c sg_fingers.h
 sg-drm-blank: sg-drm-blank.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 $(DRM_CFLAGS) -o sg-drm-blank sg-drm-blank.c $(DRM_LIBS)
 
-# Install SDK shared libraries to /usr/local/lib
+# Install SDK shared libraries to /usr/local/lib and register the path
+# with the dynamic linker. Required because our binaries' rpath
+# (/usr/local/lib) is written as DT_RUNPATH and is therefore not searched
+# for transitive deps (e.g. libsgfplib.so → libsgimage.so).
 install-sdk:
-	cd $(SGDK_LIB) && sudo make uninstall install
+	cd '$(SGDK_LIB)' && sudo make uninstall install
+	echo /usr/local/lib | sudo tee /etc/ld.so.conf.d/sgpam-sdk.conf >/dev/null
+	sudo ldconfig
+
+# Reverse of install-sdk: remove the ldconfig entry. Does NOT delete the
+# SDK shared libraries themselves (the SDK's own Makefile owns those).
+uninstall-sdk:
+	sudo rm -f /etc/ld.so.conf.d/sgpam-sdk.conf
+	sudo ldconfig
 
 # Install our binaries
 install: all
@@ -60,7 +71,7 @@ install: all
 # Sanity check — confirm SDK and system PAM are both 64-bit
 check-arch:
 	@echo "=== SDK library ==="
-	@file $(SGDK_LIB)/libsgfplib.so.4.0.1
+	@file '$(SGDK_LIB)/libsgfplib.so.4.0.1'
 	@echo ""
 	@echo "=== System PAM ==="
 	@file /usr/lib/security/pam_unix.so
