@@ -3,6 +3,7 @@
 configure_pam() {
     local label="$1"
     local pam_file="$2"
+    local args="$3"   # optional pam_sgfp.so module arguments, e.g. "retries=4"
 
     # Skip if PAM file doesn't exist
     [ -f "$pam_file" ] || return 0
@@ -13,13 +14,17 @@ configure_pam() {
         return 0
     fi
 
+    # Build the module line, appending any module arguments
+    local module_line="auth        sufficient  pam_sgfp.so"
+    [ -n "$args" ] && module_line="$module_line $args"
+
     echo -n "  Configure fingerprint auth for $label? [y/N] " > /dev/tty
     read -r answer < /dev/tty
     case "$answer" in
         [yY]*)
             cp "$pam_file" "${pam_file}.sgpam.bak"
-            sed -i '0,/^auth[[:space:]]/{/pam_sgfp/!{s/^auth[[:space:]]/auth        sufficient  pam_sgfp.so\n&/}}' "$pam_file"
-            echo "  [done] $label configured (backup: ${pam_file}.sgpam.bak)"
+            sed -i "0,/^auth[[:space:]]/{/pam_sgfp/!{s|^auth[[:space:]]|${module_line}\n&|}}" "$pam_file"
+            echo "  [done] $label configured${args:+ ($args)} (backup: ${pam_file}.sgpam.bak)"
             ;;
         *)
             echo "  [skip] $label — skipped"
@@ -108,21 +113,25 @@ post_install() {
     echo "==> Configuring PAM for fingerprint authentication..."
     echo ""
 
+    # Graphical greeters get an extra capture attempt: a lock screen is fumbled
+    # more than a terminal you are already typing in. sudo/TTY keep the default 3.
+    local greeter_args="retries=4"
+
     # Detect active display manager
     if systemctl is-active --quiet sddm.service; then
         echo "  Detected display manager: SDDM"
         echo "  Note: SDDM may not show the fingerprint prompt visually,"
         echo "        but authentication still works. Just place your finger."
         echo ""
-        configure_pam "SDDM login" "/etc/pam.d/sddm"
+        configure_pam "SDDM login" "/etc/pam.d/sddm" "$greeter_args"
     elif systemctl is-active --quiet gdm.service; then
         echo "  Detected display manager: GDM"
         echo ""
-        configure_pam "GDM login" "/etc/pam.d/gdm-password"
+        configure_pam "GDM login" "/etc/pam.d/gdm-password" "$greeter_args"
     elif systemctl is-active --quiet greetd.service; then
         echo "  Detected display manager: greetd"
         echo ""
-        configure_pam "greetd login" "/etc/pam.d/greetd"
+        configure_pam "greetd login" "/etc/pam.d/greetd" "$greeter_args"
         configure_greetd
         echo ""
         echo "  Note: Two new sessions are available in the ReGreet session picker:"

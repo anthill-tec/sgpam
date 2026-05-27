@@ -205,11 +205,17 @@ auth  include     system-auth
 .RE
 .SS Display manager (SDDM)
 Add to
-.IR /etc/pam.d/sddm :
+.IR /etc/pam.d/sddm .
+The package install hook configures graphical greeters (SDDM, GDM, greetd)
+with
+.B retries=4
+by default \(em a lock screen is fumbled more than a terminal \(em while
+.BR sudo (8)
+and console login keep the default of 3:
 .PP
 .RS
 .nf
-auth  sufficient  pam_sgfp.so
+auth  sufficient  pam_sgfp.so retries=4
 auth  include     system-login
 .fi
 .RE
