@@ -42,6 +42,16 @@
    Match the value that produced good quality at enrollment (sg_enroll -b). */
 #define BRIGHTNESS_ARG   "brightness="
 
+/* Optional module argument: brightness_step=N (1–100) escalates exposure in
+   lock-step with the retry loop — each failed sample raises brightness by N
+   (capped at PAM_BRIGHTNESS_MAX) before the next attempt, so a dim or dry
+   finger gets progressively brighter light within a single prompt. The first
+   attempt starts at brightness=N if given, else PAM_BRIGHTNESS_START. When
+   brightness_step is absent exposure is constant (the original behaviour). */
+#define BRIGHTNESS_STEP_ARG  "brightness_step="
+#define PAM_BRIGHTNESS_START 50
+#define PAM_BRIGHTNESS_MAX   100
+
 /* Capture is sampled silently up to CAPTURE_ATTEMPTS times: authentication
    succeeds on the first matching sample and only fails once every attempt is
    exhausted. Tunable per service with the retries=N module argument. This
@@ -251,11 +261,22 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     /* Parse module arguments: brightness=N (0–100), retries=N (1–MAX_ATTEMPTS) */
     DWORD brightness       = 0;
     int   have_brightness  = 0;
+    int   brightness_step  = 0;
     int   capture_attempts = CAPTURE_ATTEMPTS;
     for (int i = 0; i < argc; i++) {
         if (!argv[i])
             continue;
-        if (strncmp(argv[i], BRIGHTNESS_ARG, sizeof(BRIGHTNESS_ARG) - 1) == 0) {
+        if (strncmp(argv[i], BRIGHTNESS_STEP_ARG,
+                    sizeof(BRIGHTNESS_STEP_ARG) - 1) == 0) {
+            long v = strtol(argv[i] + sizeof(BRIGHTNESS_STEP_ARG) - 1, NULL, 10);
+            if (v >= 1 && v <= 100) {
+                brightness_step = (int)v;
+            } else {
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: ignoring out-of-range brightness_step '%s'",
+                       argv[i]);
+            }
+        } else if (strncmp(argv[i], BRIGHTNESS_ARG, sizeof(BRIGHTNESS_ARG) - 1) == 0) {
             long v = strtol(argv[i] + sizeof(BRIGHTNESS_ARG) - 1, NULL, 10);
             if (v >= 0 && v <= 100) {
                 brightness = (DWORD)v;
@@ -362,13 +383,18 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
 
-    /* 6b. Apply sensor brightness if configured (brightness=N module arg) */
-    if (have_brightness) {
+    /* 6b. Fixed brightness (brightness=N): set once here. When escalation is
+       enabled (brightness_step>0) the brightness is instead set per attempt
+       inside the capture loop below. */
+    if (have_brightness && brightness_step == 0) {
         err = SGFPM_SetBrightness(hFPM, brightness);
         if (err != SGFDX_ERROR_NONE)
             syslog(LOG_AUTH | LOG_WARNING,
                    "pam_sgfp: SetBrightness(%lu) failed (%lu)", brightness, err);
     }
+
+    /* Base exposure for escalation: explicit brightness=N or the default start */
+    DWORD bright_base = have_brightness ? brightness : PAM_BRIGHTNESS_START;
 
     /* 7. Prompt once, then sample quietly up to capture_attempts times.
        Each attempt captures, extracts and matches; the first match wins.
@@ -379,6 +405,18 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     for (int attempt = 1;
          attempt <= capture_attempts && result != PAM_SUCCESS;
          attempt++) {
+
+        /* 7a0. Escalate exposure in lock-step with the attempt (brightness_step) */
+        if (brightness_step > 0) {
+            DWORD cur = bright_base + (DWORD)(attempt - 1) * (DWORD)brightness_step;
+            if (cur > PAM_BRIGHTNESS_MAX)
+                cur = PAM_BRIGHTNESS_MAX;
+            err = SGFPM_SetBrightness(hFPM, cur);
+            if (err != SGFDX_ERROR_NONE)
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: SetBrightness(%lu) failed (%lu), attempt %d/%d",
+                       cur, err, attempt, capture_attempts);
+        }
 
         /* 7a. Capture */
         err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);

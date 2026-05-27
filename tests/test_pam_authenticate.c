@@ -373,6 +373,76 @@ Test(pam_authenticate, retries_arg_limits_attempts, .init = setup,
                  g_mock.get_image_ex_count);
 }
 
+/* ── Brightness escalation lock-step with retries ─────────── */
+
+Test(pam_authenticate, brightness_escalates_each_failed_attempt, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;          /* every attempt fails */
+
+    const char *args[] = {"brightness=40", "brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 3,
+                 "brightness should be set once per attempt, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 80,
+                 "3 attempts from 40 step 20 -> 40,60,80; last should be 80, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, brightness_escalation_caps_at_100, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    const char *args[] = {"brightness=80", "brightness_step=30"};
+    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.last_brightness, 100,
+                 "80,110->100,140->100; should cap at 100, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, brightness_escalates_from_default_base, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    /* step given but no explicit base -> starts at default 50 */
+    const char *args[] = {"brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 3,
+                 "should set brightness each attempt, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 90,
+                 "50,70,90 from default base 50 step 20; last should be 90, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, brightness_escalation_stops_on_match, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    BOOL results[] = {FALSE, TRUE};       /* match on 2nd attempt */
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    const char *args[] = {"brightness=40", "brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "should stop escalating after the matching attempt, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 60,
+                 "matched on attempt 2 at brightness 60, got %lu",
+                 g_mock.last_brightness);
+}
+
 Test(pam_authenticate, legacy_template_still_works, .init = setup,
      .fini = teardown)
 {

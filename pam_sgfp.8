@@ -6,6 +6,7 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .RI [ sufficient | required ]
 .B pam_sgfp.so
 .RI [ brightness = N ]
+.RI [ brightness_step = N ]
 .RI [ retries = N ]
 .SH DESCRIPTION
 .B pam_sgfp
@@ -67,6 +68,25 @@ and the login brightness degrades matching.
 Values outside 0\(en100 are ignored and logged via
 .BR syslog (3).
 If the argument is omitted, the sensor's default exposure is used.
+When
+.B brightness_step
+is also given, this value is the starting exposure for the first attempt.
+.TP
+.BI brightness_step= N
+Escalate exposure in lock-step with the retry loop: an integer from 1 to
+100 added to the brightness after each failed sample (capped at 100)
+before the next attempt.
+The first attempt starts at
+.BI brightness= N
+if given, otherwise at 50.
+This gives a dim or dry finger progressively brighter light within a
+single prompt, mirroring the auto-escalation of
+.BR sg_enroll (1).
+When omitted, exposure is constant (the original behaviour).
+For example,
+.B "brightness=40 brightness_step=20 retries=3"
+samples at brightness 40, 60, then 80.
+Values outside 1\(en100 are ignored and logged.
 .TP
 .BI retries= N
 Number of times to silently sample the sensor before rejecting,
