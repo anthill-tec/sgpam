@@ -136,10 +136,6 @@ post_install() {
     elif systemctl is-active --quiet greetd.service; then
         echo "  Detected display manager: greetd (covered via system-local-login)"
         configure_greetd
-        echo ""
-        echo "  Note: Two new sessions are available in the ReGreet session picker:"
-        echo "    - Hyprland (sgpam)          — blanks screen between greeter and desktop"
-        echo "    - Hyprland (uwsm + sgpam)   — same, with uwsm session management"
     else
         echo "  No graphical display manager detected (console login configured)"
     fi
