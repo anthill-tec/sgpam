@@ -50,7 +50,7 @@ sg-probe: sg_probe.c
 	$(CC) $(CFLAGS) -o sg-probe sg_probe.c $(LDFLAGS_COMMON) $(LIBS_ENROLL)
 
 sg-drm-blank: sg-drm-blank.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 $(DRM_CFLAGS) -o sg-drm-blank sg-drm-blank.c $(DRM_LIBS)
+	$(CC) -O2 -Wall -Wextra -std=gnu11 $(DRM_CFLAGS) $(LDFLAGS) -o sg-drm-blank sg-drm-blank.c $(DRM_LIBS)
 
 # Install SDK shared libraries to /usr/local/lib and register the path
 # with the dynamic linker. Required because our binaries' rpath
