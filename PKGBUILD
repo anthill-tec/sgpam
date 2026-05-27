@@ -1,10 +1,10 @@
 # Maintainer: Antony John <antojk@gmail.com>
 pkgname=sgpam
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="SecuGen U20 fingerprint authentication for sudo, TTY and greeter login (greetd/ReGreet) with DRM blanking"
 arch=('x86_64')
-url="https://github.com/4property/sgpam"
+url="https://github.com/anthill-tec/sgpam"
 license=('MIT')
 depends=('secugen-fdx-driver' 'pam')
 makedepends=('secugen-fdx-sdk' 'criterion' 'libdrm')
