@@ -12,10 +12,10 @@ for arg in "$@"; do
 done
 
 if [ "$VERBOSE" -eq 1 ]; then
-    echo "sgpam: blanking DRM displays (verbose)..." >&2
-    sg-drm-blank --verbose
+    echo "sgpam: blanking DRM displays (verbose, hold 2000ms)..." >&2
+    sg-drm-blank --verbose --hold 2000
     echo "sgpam: launching uwsm start -e -D Hyprland hyprland.desktop$ARGS" >&2
 else
-    sg-drm-blank
+    sg-drm-blank --hold 2000
 fi
 exec uwsm start -e -D Hyprland hyprland.desktop $ARGS
