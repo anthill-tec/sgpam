@@ -104,6 +104,14 @@ static int capture_and_extract(HSGFPM hFPM,
         fprintf(stderr, "  Warning: could not set brightness %lu (err %lu)\n",
                 brightness, err);
 
+    /* Read the LED brightness back so we can show what the sensor actually
+       reports versus what we asked for (confirms SetBrightness took effect). */
+    DWORD reported = 0;
+    SGDeviceInfoParam di;
+    memset(&di, 0, sizeof(di));
+    if (SGFPM_GetDeviceInfo(hFPM, &di) == SGFDX_ERROR_NONE)
+        reported = di.Brightness;
+
     err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
     if (err != SGFDX_ERROR_NONE) {
         fprintf(stderr, "  Capture failed (err %lu). Try again.\n", err);
@@ -112,7 +120,8 @@ static int capture_and_extract(HSGFPM hFPM,
 
     DWORD quality = 0;
     SGFPM_GetImageQuality(hFPM, imgW, imgH, imgBuf, &quality);
-    printf("  Image quality: %lu/100 (brightness %lu)\n", quality, brightness);
+    printf("  Image quality: %lu/100 (brightness set %lu, sensor reports %lu)\n",
+           quality, brightness, reported);
     if (quality < CAPTURE_QUALITY) {
         fprintf(stderr, "  Quality too low (%lu). Please try again.\n", quality);
         return -1;
@@ -532,8 +541,9 @@ int main(int argc, char *argv[])
     SGDeviceInfoParam devInfo;
     memset(&devInfo, 0, sizeof(devInfo));
     SGFPM_GetDeviceInfo(hFPM, &devInfo);
-    printf("Scanner ready: %lu x %lu px @ %lu DPI\n\n",
-           devInfo.ImageWidth, devInfo.ImageHeight, devInfo.ImageDPI);
+    printf("Scanner ready: %lu x %lu px @ %lu DPI (LED brightness %lu/100)\n\n",
+           devInfo.ImageWidth, devInfo.ImageHeight, devInfo.ImageDPI,
+           devInfo.Brightness);
 
     /* Guard against overflow: U20 is 260x300; reject anything absurd */
     if (devInfo.ImageWidth == 0 || devInfo.ImageHeight == 0 ||
