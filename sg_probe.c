@@ -27,8 +27,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "sgfplib.h"
+
+#define SECUGEN_VID 0x1162
 
 #define DEVICE_NAME     SG_DEV_FDU05
 #define CAPTURE_TIMEOUT 10000
@@ -240,8 +243,189 @@ static int cmd_qsweep(HSGFPM h, int start, int end, int step)
         SGDeviceInfoParam after = read_info(h);
         printf("  %-7d %lu (%-14s) %-6lu %-7lu\n",
                b, err, err_name(err), after.Gain, q);
+        fflush(stdout);   /* show progress even if the run is interrupted */
     }
     free(img);
+    return 0;
+}
+
+/* Map an SGFDxDeviceName code to a human model string. */
+static const char *model_name(DWORD dev)
+{
+    switch (dev) {
+        case SG_DEV_UNKNOWN:    return "UNKNOWN";
+        case SG_DEV_FDP02:      return "FDP02";
+        case SG_DEV_FDU02:      return "FDU02";
+        case SG_DEV_FDU03:      return "FDU03 (Hamster Plus)";
+        case SG_DEV_FDU04:      return "FDU04 (Hamster IV)";
+        case SG_DEV_FDU05:      return "FDU05 (HU20 / U20)";
+        case SG_DEV_FDU06:      return "FDU06 (UPx)";
+        case SG_DEV_FDU07:      return "FDU07 (U10)";
+        case SG_DEV_FDU07A:     return "FDU07A (U10-AP)";
+        case SG_DEV_FDU08:      return "FDU08 (U20A)";
+        case SG_DEV_FDU08P:     return "FDU08P (U20-AP, discontinued)";
+        case SG_DEV_FDU06P:     return "FDU06P (UPx-P)";
+        case SG_DEV_FDUSDA:     return "FDUSDA (U20-ASF-BT SPP)";
+        case SG_DEV_FDUSDA_BLE: return "FDUSDA_BLE (U20-ASF-BT BLE)";
+        case SG_DEV_FDU08X:     return "FDU08X (U20-ASFX USB)";
+        case SG_DEV_FDU09:      return "FDU09 (U30, discontinued)";
+        case SG_DEV_FDU08A:     return "FDU08A (U20-AP)";
+        case SG_DEV_FDU09A:     return "FDU09A (U30)";
+        case SG_DEV_FDU10A:     return "FDU10A (U-AIR)";
+        case SG_DEV_AUTO:       return "AUTO";
+        default:                return "?";
+    }
+}
+
+/* SecuGen USB product-ID -> model, seeded from the vendor's 99SecuGen.rules.
+ * The SDK's EnumerateDevice DevName is unreliable (returns UNKNOWN for the U20),
+ * so the USB VID:PID is the canonical model identifier. */
+static const char *usb_pid_model(unsigned pid)
+{
+    switch (pid) {
+        case 0x0320: return "FDU03 (Hamster Plus)";
+        case 0x0322: return "SDU03M";
+        case 0x0330: return "FDU04 (Hamster IV)";
+        case 0x1000: return "SDU03P";
+        case 0x2000: return "SDU04P";
+        case 0x2200: return "U20 (FDU05)";
+        case 0x2201: return "UPx (FDU06)";
+        case 0x2203: return "U10 (FDU07)";
+        case 0x2240: return "U20A (FDU08)";
+        case 0x2360: return "U20-AP";
+        case 0x2410: return "U30A";
+        case 0x2500: return "U-AIR (FDU10A)";
+        default:     return NULL;
+    }
+}
+
+/* Read a one-line sysfs attribute, newline-trimmed. Returns 0 on success. */
+static int read_sysfs_attr(const char *path, char *buf, size_t len)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char *ok = fgets(buf, (int)len, f);
+    fclose(f);
+    if (!ok) return -1;
+    buf[strcspn(buf, "\r\n")] = '\0';
+    return 0;
+}
+
+/* Find the USB product-id of the attached SecuGen reader by scanning sysfs.
+ * If sn is non-NULL, prefer the device whose serial matches; else (or on no
+ * match) return the first vendor-1162 device. Returns 0 if none found. */
+static unsigned find_secugen_usb_pid(const char *sn)
+{
+    DIR *d = opendir("/sys/bus/usb/devices");
+    if (!d) return 0;
+
+    struct dirent *e;
+    unsigned first = 0, matched = 0;
+    char path[512], v[32], p[32], s[80];
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "/sys/bus/usb/devices/%s/idVendor", e->d_name);
+        if (read_sysfs_attr(path, v, sizeof v) != 0) continue;
+        if ((unsigned)strtoul(v, NULL, 16) != SECUGEN_VID) continue;
+
+        snprintf(path, sizeof path, "/sys/bus/usb/devices/%s/idProduct", e->d_name);
+        if (read_sysfs_attr(path, p, sizeof p) != 0) continue;
+        unsigned pid = (unsigned)strtoul(p, NULL, 16);
+        if (!first) first = pid;
+
+        if (sn && *sn) {
+            snprintf(path, sizeof path, "/sys/bus/usb/devices/%s/serial", e->d_name);
+            if (read_sysfs_attr(path, s, sizeof s) == 0 && strcmp(s, sn) == 0) {
+                matched = pid;
+                break;
+            }
+        }
+    }
+    closedir(d);
+    return matched ? matched : first;
+}
+
+/* Capabilities enumeration — model-agnostic. Init AUTO, enumerate every
+ * attached SecuGen device, then per device report info + Smart Capture support
+ * + a recommended config (empirical; only FDU05/U20 validated so far). This is
+ * the seed for an installer that auto-tunes per model. */
+static int cmd_caps(void)
+{
+    HSGFPM h = NULL;
+    DWORD err = SGFPM_Create(&h);
+    if (err != SGFDX_ERROR_NONE) {
+        fprintf(stderr, "SGFPM_Create failed: %lu (%s)\n", err, err_name(err));
+        return 1;
+    }
+    err = SGFPM_Init(h, SG_DEV_AUTO);   /* AUTO so any model is detected */
+    if (err != SGFDX_ERROR_NONE) {
+        fprintf(stderr, "SGFPM_Init(SG_DEV_AUTO) failed: %lu (%s)\n", err, err_name(err));
+        SGFPM_Terminate(h);
+        return 1;
+    }
+
+    DWORD ndevs = 0;
+    SGDeviceList *list = NULL;
+    err = SGFPM_EnumerateDevice(h, &ndevs, &list);
+    if (err != SGFDX_ERROR_NONE) {
+        fprintf(stderr, "SGFPM_EnumerateDevice failed: %lu (%s)\n", err, err_name(err));
+        SGFPM_Terminate(h);
+        return 1;
+    }
+
+    printf("Enumerated %lu SecuGen device(s):\n", (unsigned long)ndevs);
+    for (DWORD i = 0; i < ndevs; i++)
+        printf("  [%lu] model=%-22s DevName=0x%02lX DevID=%lu DevType=%u SN=%s\n",
+               (unsigned long)i, model_name(list[i].DevName),
+               (unsigned long)list[i].DevName, (unsigned long)list[i].DevID,
+               (unsigned)list[i].DevType, (const char *)list[i].DevSN);
+    if (ndevs == 0)
+        printf("  (none — is a reader plugged in and accessible?)\n");
+    printf("\n");
+
+    for (DWORD i = 0; i < ndevs; i++) {
+        printf("=== Device %lu: %s ===\n",
+               (unsigned long)i, model_name(list[i].DevName));
+        err = SGFPM_OpenDevice(h, i);
+        if (err != SGFDX_ERROR_NONE) {
+            printf("  OpenDevice(%lu) failed: %lu (%s)\n",
+                   (unsigned long)i, err, err_name(err));
+            continue;
+        }
+
+        SGDeviceInfoParam di = read_info(h);
+        print_info(&di, "  info");
+        DWORD maxt = 0;
+        SGFPM_GetMaxTemplateSize(h, &maxt);
+        printf("  max_template_size=%lu\n", maxt);
+
+        DWORD werr = SGFPM_WriteData(h, 5, 1);   /* Smart Capture support probe */
+        printf("  Smart Capture (WriteData(5,1)): rc=%lu (%s)%s\n",
+               werr, err_name(werr),
+               werr == SGFDX_ERROR_NONE ? "" : "  <-- not supported on this model");
+
+        /* Identify the model by USB VID:PID (canonical) rather than the SDK's
+         * DevName, which returns UNKNOWN for the U20. Match by serial. */
+        unsigned pid = find_secugen_usb_pid((const char *)di.DeviceSN);
+        const char *usbmodel = pid ? usb_pid_model(pid) : NULL;
+        printf("  USB id: %04x:%04x -> %s\n", SECUGEN_VID, pid,
+               usbmodel ? usbmodel : (pid ? "unknown SecuGen PID" : "no USB match"));
+        printf("  (SDK DevName=0x%02lX %s [unreliable]; geometry %lux%lu @ %lu DPI)\n",
+               (unsigned long)list[i].DevName, model_name(list[i].DevName),
+               di.ImageWidth, di.ImageHeight, di.ImageDPI);
+
+        if (pid == 0x2200)   /* U20 (FDU05) */
+            printf("  recommended: smart_capture=on, brightness floor=readout(%lu), "
+                   "retries=4 [VALIDATED]\n", di.Brightness);
+        else
+            printf("  recommended: smart_capture=on, retries>=3 "
+                   "[UNVALIDATED model — run capture/qsweep to characterize]\n");
+
+        SGFPM_CloseDevice(h);
+        printf("\n");
+    }
+
+    SGFPM_Terminate(h);
     return 0;
 }
 
@@ -256,13 +440,20 @@ static void usage(const char *argv0)
         "                          capture one image, print quality (-1 = leave default)\n"
         "  watch [count] [ms]      poll device info to spot autonomous drift (default 10 @ 500ms)\n"
         "  qsweep [start end step] Smart Capture ON, sweep brightness over ONE held finger,\n"
-        "                          print quality at each level (default 20 100 20)\n",
+        "                          print quality at each level (default 20 100 20)\n"
+        "  caps                    enumerate all attached readers (model, SN), per-device\n"
+        "                          info + Smart Capture support + recommended config\n",
         argv0);
 }
 
 int main(int argc, char *argv[])
 {
     if (argc < 2) { usage(argv[0]); return 1; }
+
+    /* caps is model-agnostic: it inits SG_DEV_AUTO and enumerates, so it does
+     * not use the FDU05 single-device open path the other commands share. */
+    if (strcmp(argv[1], "caps") == 0)
+        return cmd_caps();
 
     HSGFPM h = open_device();
     int rc = 1;
