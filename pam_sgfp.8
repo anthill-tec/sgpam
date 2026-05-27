@@ -225,16 +225,24 @@ auth  sufficient  pam_sgfp.so retries=4
 auth  include     system-login
 .fi
 .RE
-.SS Console login
+.SS Console and greeter login
 Add to
-.IR /etc/pam.d/login :
+.IR /etc/pam.d/system-local-login
+\(em both console login
+.RB ( /etc/pam.d/login )
+and greetd
+.RB ( /etc/pam.d/greetd )
+include it, so one line covers both, placed after the
+.BR pam_nologin / pam_securetty
+gates and before the password include:
 .PP
 .RS
 .nf
-auth  sufficient  pam_sgfp.so
-auth  include     system-local-login
+auth        sufficient  pam_sgfp.so retries=4
+auth        include     system-login
 .fi
 .RE
+This is what the package install hook configures automatically.
 .SH SEE ALSO
 .BR sg_enroll (1),
 .BR pam (8),

@@ -113,36 +113,34 @@ post_install() {
     echo "==> Configuring PAM for fingerprint authentication..."
     echo ""
 
-    # Graphical greeters get an extra capture attempt: a lock screen is fumbled
-    # more than a terminal you are already typing in. sudo/TTY keep the default 3.
+    # Greeter / console logins get an extra capture attempt (a lock screen is
+    # fumbled more than a terminal you're already typing in); sudo keeps 3.
     local greeter_args="retries=4"
 
-    # Detect active display manager
+    # Console AND greetd logins both 'include system-local-login', so patch it
+    # once: pam_sgfp lands AFTER the outer nologin/securetty gates (which live
+    # in /etc/pam.d/{login,greetd}) and BEFORE the password include — fingerprint
+    # first, password fallback, no double-patch, no bypass of nologin/securetty.
+    configure_pam "console + greeter login" "/etc/pam.d/system-local-login" "$greeter_args"
+
+    # SDDM/GDM include system-login directly (not system-local-login), so they
+    # need their own line. greetd is already covered above via system-local-login.
     if systemctl is-active --quiet sddm.service; then
         echo "  Detected display manager: SDDM"
         echo "  Note: SDDM may not show the fingerprint prompt visually,"
         echo "        but authentication still works. Just place your finger."
-        echo ""
         configure_pam "SDDM login" "/etc/pam.d/sddm" "$greeter_args"
     elif systemctl is-active --quiet gdm.service; then
         echo "  Detected display manager: GDM"
-        echo ""
         configure_pam "GDM login" "/etc/pam.d/gdm-password" "$greeter_args"
     elif systemctl is-active --quiet greetd.service; then
-        echo "  Detected display manager: greetd"
-        echo ""
-        configure_pam "greetd login" "/etc/pam.d/greetd" "$greeter_args"
+        echo "  Detected display manager: greetd (covered via system-local-login)"
         configure_greetd
-        echo ""
-        echo "  Note: Two new sessions are available in the ReGreet session picker:"
-        echo "    - Hyprland (sgpam)          — blanks screen between greeter and desktop"
-        echo "    - Hyprland (uwsm + sgpam)   — same, with uwsm session management"
     else
-        echo "  No supported display manager detected (checked: sddm, gdm, greetd)"
+        echo "  No graphical display manager detected (console login configured)"
     fi
 
     configure_pam "sudo" "/etc/pam.d/sudo"
-    configure_pam "TTY login" "/etc/pam.d/login"
 
     echo ""
     echo "==> Enrollment instructions:"
@@ -172,12 +170,14 @@ pre_remove() {
     echo ">>> sgpam: Removing fingerprint auth from PAM configuration..."
     echo ""
 
+    unconfigure_pam "console + greeter login" "/etc/pam.d/system-local-login"
     unconfigure_pam "SDDM login" "/etc/pam.d/sddm"
     unconfigure_pam "GDM login" "/etc/pam.d/gdm-password"
-    unconfigure_pam "greetd login" "/etc/pam.d/greetd"
     unconfigure_greetd
     unconfigure_pam "sudo" "/etc/pam.d/sudo"
-    unconfigure_pam "TTY login" "/etc/pam.d/login"
+    # Defensively clean direct patches from older sgpam layouts (no-op if absent)
+    unconfigure_pam "greetd login (legacy)" "/etc/pam.d/greetd"
+    unconfigure_pam "TTY login (legacy)" "/etc/pam.d/login"
 }
 
 post_remove() {

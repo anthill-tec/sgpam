@@ -1,23 +1,27 @@
 # Maintainer: Antony John <antojk@gmail.com>
 pkgname=sgpam
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
-pkgdesc="SecuGen U20 fingerprint authentication for sudo, TTY and greeter login (greetd/ReGreet) with DRM blanking"
+pkgdesc="SecuGen U20 fingerprint authentication for sudo, TTY and greeter login (greetd/ReGreet)"
 arch=('x86_64')
-url="https://github.com/4property/sgpam"
+url="https://github.com/anthill-tec/sgpam"
 license=('MIT')
-depends=('secugen-fdx-driver' 'pam')
+# Runtime: driver (libsgfplib.so), pam (libpam), gcc-libs (libstdc++).
+# libdrm is build-only here: sg-drm-blank and the DRM tests are built/checked
+# but the DRM-blanking binary is NOT shipped in this release (pending more
+# testing of the --hold variant). The SDK is build-only too.
+depends=('secugen-fdx-driver' 'pam' 'gcc-libs')
 makedepends=('secugen-fdx-sdk' 'criterion' 'libdrm')
 optdepends=(
     'greetd: Wayland-native login manager with fingerprint prompt support'
     'greetd-regreet: GTK4 greeter for greetd with theming support'
-    'hyprland: Wayland compositor for sgpam session wrappers'
+    'hyprland: Wayland compositor for the greetd/ReGreet greeter'
 )
 install=sgpam.install
 source=()
 
 prepare() {
-    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,sg-drm-blank.c,LICENSE,sg_enroll.1,pam_sgfp.8,hyprland.conf,sgpam-start-hyprland,sgpam-start-hyprland-uwsm,hyprland-sgpam.desktop,hyprland-uwsm-sgpam.desktop} "$srcdir/"
+    cp -a "$startdir"/{Makefile,pam_sgfp.c,sg_enroll.c,sg_fingers.h,sg-drm-blank.c,LICENSE,sg_enroll.1,pam_sgfp.8,hyprland.conf} "$srcdir/"
     cp -a "$startdir"/tests "$srcdir/"
 }
 
@@ -37,7 +41,6 @@ package() {
 
     install -Dm755 pam_sgfp.so "$pkgdir/usr/lib/security/pam_sgfp.so"
     install -Dm755 sg_enroll   "$pkgdir/usr/bin/sg_enroll"
-    install -Dm755 sg-drm-blank "$pkgdir/usr/bin/sg-drm-blank"
 
     # Template directory — restrictive permissions (root-only, stores biometric data)
     install -dm700 "$pkgdir/etc/security/sg_fingerprints"
@@ -45,14 +48,10 @@ package() {
     install -Dm644 sg_enroll.1 "$pkgdir/usr/share/man/man1/sg_enroll.1"
     install -Dm644 pam_sgfp.8  "$pkgdir/usr/share/man/man8/pam_sgfp.8"
 
-    # greetd greeter session config (Hyprland wrapper for regreet)
+    # greetd greeter config — runs ReGreet (the fingerprint login screen) under
+    # Hyprland. NOT the DRM-blanking wrappers, which are deferred to a later
+    # release (sg-drm-blank + the session .desktop entries are not shipped yet).
     install -Dm644 hyprland.conf "$pkgdir/etc/greetd/hyprland.conf"
-
-    # Wayland session wrappers (DRM blanking between greeter and desktop)
-    install -Dm755 sgpam-start-hyprland      "$pkgdir/usr/bin/sgpam-start-hyprland"
-    install -Dm755 sgpam-start-hyprland-uwsm "$pkgdir/usr/bin/sgpam-start-hyprland-uwsm"
-    install -Dm644 hyprland-sgpam.desktop      "$pkgdir/usr/share/wayland-sessions/hyprland-sgpam.desktop"
-    install -Dm644 hyprland-uwsm-sgpam.desktop "$pkgdir/usr/share/wayland-sessions/hyprland-uwsm-sgpam.desktop"
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
