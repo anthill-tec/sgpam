@@ -412,18 +412,80 @@ Test(pam_authenticate, brightness_escalates_from_default_base, .init = setup,
     write_template("testuser", 400);
     g_mock.match_result = FALSE;
 
-    /* step given but no explicit base: attempt 1 keeps the sensor default
-       (no set), then escalates from 50. With step 20 over 3 attempts the
-       brightness sequence is (sensor), 50, 70 — only two SetBrightness calls. */
+    /* Explicit fixed step overrides the adaptive ladder. No base, readout 0
+       -> floor 50. Fixed step 20 over 3 attempts gives rungs 50,70,90; attempt
+       1 keeps the sensor default, so attempts 2 (70) and 3 (90) are set. */
     const char *args[] = {"brightness_step=20"};
     int rc = pam_sm_authenticate(NULL, 0, 1, args);
     cr_assert_eq(rc, PAM_AUTH_ERR);
     cr_assert_eq(g_mock.set_brightness_count, 2,
                  "first attempt keeps sensor default; only 2 later sets, got %d",
                  g_mock.set_brightness_count);
-    cr_assert_eq(g_mock.last_brightness, 70,
-                 "attempts: sensor,50,70; last should be 70, got %lu",
+    cr_assert_eq(g_mock.last_brightness, 90,
+                 "fixed step 20 from floor 50: 50,70,90; last set should be 90, got %lu",
                  g_mock.last_brightness);
+}
+
+Test(pam_authenticate, adaptive_ladder_starts_at_sensor_readout, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 70;       /* sensor reports 70 -> ladder floor */
+    BOOL results[] = {FALSE, TRUE};       /* match on 2nd attempt */
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    /* retries=4, adaptive: floor 70 -> 100 over 4 rungs = 70,80,90,100.
+       Attempt 1 keeps the sensor default (70); attempt 2 sets 80 and matches.
+       last==80 proves the floor is the readout (70), not the 50 fallback. */
+    const char *args[] = {"retries=4"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 1,
+                 "matched on attempt 2, so exactly one set, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 80,
+                 "floor 70 step (100-70)/3=10 -> attempt 2 = 80, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, explicit_brightness_overrides_readout_floor, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 70;       /* readout would be 70 ... */
+    BOOL results[] = {FALSE, TRUE};
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    /* brightness=40 overrides the readout as the floor. Adaptive over 3
+       attempts: 40,70,100. With an explicit base, attempt 1 is set (40),
+       attempt 2 (70) matches. last==70 proves floor=40, not the readout 70. */
+    const char *args[] = {"brightness=40"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "explicit base sets attempt 1 too, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 70,
+                 "floor 40 over 3 rungs: 40,70,100; matched at 70, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, brightness_step_zero_disables_escalation, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 70;
+    g_mock.match_result = FALSE;          /* all attempts fail */
+
+    /* brightness_step=0 with no explicit base: never touch brightness */
+    const char *args[] = {"brightness_step=0"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 0,
+                 "step 0 must disable escalation entirely, got %d",
+                 g_mock.set_brightness_count);
 }
 
 Test(pam_authenticate, default_escalates_on_failure_only, .init = setup,
@@ -432,15 +494,17 @@ Test(pam_authenticate, default_escalates_on_failure_only, .init = setup,
     write_template("testuser", 400);
     g_mock.match_result = FALSE;          /* all attempts fail */
 
-    /* No args at all: brightness_step defaults to 15 (escalation on), base 50.
-       Attempt 1 keeps the sensor default; attempts 2,3 use 50 then 65. */
+    /* No args: adaptive ladder scales floor->100 across retries. Sensor
+       readout is 0 here (mock default) so floor falls back to 50; with 3
+       attempts the rungs are 50,75,100. Attempt 1 keeps the sensor default,
+       so only attempts 2 (75) and 3 (100) are set. */
     int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
     cr_assert_eq(rc, PAM_AUTH_ERR);
     cr_assert_eq(g_mock.set_brightness_count, 2,
                  "first attempt untouched; 2 later attempts set, got %d",
                  g_mock.set_brightness_count);
-    cr_assert_eq(g_mock.last_brightness, 65,
-                 "default step 15 from base 50 -> 50,65; last should be 65, got %lu",
+    cr_assert_eq(g_mock.last_brightness, 100,
+                 "adaptive ladder must reach 100 on the last attempt, got %lu",
                  g_mock.last_brightness);
 }
 

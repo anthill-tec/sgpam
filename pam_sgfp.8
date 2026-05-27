@@ -67,40 +67,47 @@ stored in the template, so a mismatch between the enrollment brightness
 and the login brightness degrades matching.
 Values outside 0\(en100 are ignored and logged via
 .BR syslog (3).
-If the argument is omitted, the first attempt uses the sensor's own
-default exposure and later attempts escalate from 50 (see
+If omitted, the escalation floor is taken from the sensor's own reported
+brightness instead (see
 .BR brightness_step ).
-When
-.B brightness_step
-is given a non-zero value,
-.B brightness=N
-is the starting exposure applied from the very first attempt.
 .TP
 .BI brightness_step= N
-Escalate exposure in lock-step with the retry loop: an integer from 0 to
-100 added to the brightness after each failed sample (capped at 100)
-before the next attempt.
-.B Escalation is on by default
-with a step of 15; set
-.B brightness_step=0
-for constant exposure (the original behaviour).
+Control how exposure escalates across the retry attempts.
 .IP
-If
-.B brightness=N
-is set, escalation starts from
+By default (argument absent) an
+.B adaptive ladder
+is used: the brightness scales evenly from a
+.I floor
+up to the ceiling of 100, spread across the
+.B retries
+attempts.
+The floor is the sensor's own LED brightness as read back from the device
+\(em or
+.BI brightness= N
+if that is given, or 50 if the readout is unusable \(em and is logged so
+the active floor is visible.
+The ceiling is hard-clamped at 100 (the SDK does not police out-of-range
+values itself).
+With no explicit
+.BI brightness= N
+the first attempt keeps the sensor's own exposure untouched and scaling
+begins on the second attempt, so a sensor that already works is left alone.
+.IP
+A positive
 .I N
-on the first attempt.
-Otherwise the first attempt keeps the sensor's own exposure \(em so a
-sensor that already works is left untouched \(em and escalation begins at
-50 on the second attempt.
-This gives a dim or dry finger progressively brighter light within a
-single prompt, mirroring the auto-escalation of
-.BR sg_enroll (1).
-For example, with the defaults a bare
-.B pam_sgfp.so
-samples at (sensor default), 50, then 65; whereas
+overrides the adaptive ladder with a fixed increment of
+.I N
+added per attempt (capped at 100).
+.B brightness_step=0
+disables escalation entirely (constant exposure).
+.IP
+For example, a sensor reporting 40 with
+.B retries=3
+samples at (sensor), 70, 100; reporting 70 with
+.B retries=4
+gives (sensor), 80, 90, 100; while
 .B "brightness=40 brightness_step=20 retries=3"
-samples at 40, 60, then 80.
+forces 40, 60, 80.
 Values outside 0\(en100 are ignored and logged.
 .TP
 .BI retries= N

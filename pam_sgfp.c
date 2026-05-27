@@ -42,19 +42,19 @@
    Match the value that produced good quality at enrollment (sg_enroll -b). */
 #define BRIGHTNESS_ARG   "brightness="
 
-/* Optional module argument: brightness_step=N (1–100) escalates exposure in
-   lock-step with the retry loop — each failed sample raises brightness by N
-   (capped at PAM_BRIGHTNESS_MAX) before the next attempt, so a dim or dry
-   finger gets progressively brighter light within a single prompt. The first
-   attempt starts at brightness=N if given, else PAM_BRIGHTNESS_START. When no
-   explicit brightness=N is set, the first attempt keeps the sensor's own
-   exposure and escalation only begins on the second attempt — so a sensor
-   that works fine is left alone. Escalation is on by default
-   (PAM_BRIGHTNESS_STEP); brightness_step=0 disables it for constant exposure. */
-#define BRIGHTNESS_STEP_ARG  "brightness_step="
-#define PAM_BRIGHTNESS_START 50
-#define PAM_BRIGHTNESS_STEP  15   /* default per-attempt escalation increment */
-#define PAM_BRIGHTNESS_MAX   100
+/* Exposure escalation across the retry loop. By default the brightness scales
+   from a floor up to PAM_BRIGHTNESS_MAX spread evenly over the retry attempts
+   (the readout-driven ladder): the floor is the sensor's reported brightness
+   (or brightness=N if given, or PAM_BRIGHTNESS_START if the readout is
+   unusable), and the ceiling is hard-clamped at 100. With no explicit
+   brightness=N the first attempt keeps the sensor's own exposure untouched and
+   scaling begins on the second attempt — so a sensor that already works is left
+   alone. The optional brightness_step=N argument overrides the adaptive ladder
+   with a fixed per-attempt increment; brightness_step=0 disables escalation. */
+#define BRIGHTNESS_STEP_ARG      "brightness_step="
+#define PAM_BRIGHTNESS_START     50    /* floor fallback when readout unusable */
+#define PAM_BRIGHTNESS_MAX       100   /* hard ceiling                         */
+#define BRIGHTNESS_STEP_ADAPTIVE (-1)  /* brightness_step unset → scale to max  */
 
 /* Capture is sampled silently up to CAPTURE_ATTEMPTS times: authentication
    succeeds on the first matching sample and only fails once every attempt is
@@ -265,7 +265,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     /* Parse module arguments: brightness=N (0–100), retries=N (1–MAX_ATTEMPTS) */
     DWORD brightness       = 0;
     int   have_brightness  = 0;
-    int   brightness_step  = PAM_BRIGHTNESS_STEP;  /* escalation on by default */
+    int   brightness_step  = BRIGHTNESS_STEP_ADAPTIVE;  /* adaptive by default */
     int   capture_attempts = CAPTURE_ATTEMPTS;
     for (int i = 0; i < argc; i++) {
         if (!argv[i])
@@ -387,9 +387,24 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
 
-    /* 6b. Fixed brightness (brightness=N): set once here. When escalation is
-       enabled (brightness_step>0) the brightness is instead set per attempt
-       inside the capture loop below. */
+    /* 6b. Read back the sensor's current LED brightness and derive the
+       escalation floor: an explicit brightness=N wins, else the sensor's own
+       readout (when sane), else the fallback start. Logged so the active floor
+       is visible in the auth log. */
+    DWORD sensor_brightness = devInfo.Brightness;
+    DWORD bright_floor;
+    if (have_brightness)
+        bright_floor = brightness;
+    else if (sensor_brightness >= 1 && sensor_brightness <= PAM_BRIGHTNESS_MAX)
+        bright_floor = sensor_brightness;
+    else
+        bright_floor = PAM_BRIGHTNESS_START;
+
+    syslog(LOG_AUTH | LOG_INFO,
+           "pam_sgfp: LED brightness readout %lu; escalation floor %lu, ceiling %d",
+           sensor_brightness, bright_floor, PAM_BRIGHTNESS_MAX);
+
+    /* Constant exposure (brightness_step=0) with an explicit base: set it once. */
     if (have_brightness && brightness_step == 0) {
         err = SGFPM_SetBrightness(hFPM, brightness);
         if (err != SGFDX_ERROR_NONE)
@@ -407,30 +422,31 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
          attempt <= capture_attempts && result != PAM_SUCCESS;
          attempt++) {
 
-        /* 7a0. Escalate exposure in lock-step with the attempt (brightness_step).
-           With an explicit brightness=N base, escalate from N on every attempt.
-           Without one, leave the sensor's own exposure on the first attempt and
-           only start brightening (from PAM_BRIGHTNESS_START) once it has failed. */
-        if (brightness_step > 0) {
+        /* 7a0. Scale exposure toward the ceiling in lock-step with the attempt.
+           Floor = bright_floor (readout / explicit base / fallback); ceiling =
+           PAM_BRIGHTNESS_MAX. A positive brightness_step uses a fixed increment;
+           otherwise the floor..ceiling span is spread evenly across the retry
+           attempts. The first attempt keeps the sensor's own exposure unless an
+           explicit brightness=N base was given. brightness_step=0 skips this. */
+        if (brightness_step != 0 && (have_brightness || attempt >= 2)) {
             DWORD cur;
-            int   do_set = 1;
-            if (have_brightness)
-                cur = brightness + (DWORD)(attempt - 1) * (DWORD)brightness_step;
-            else if (attempt == 1)
-                do_set = 0;   /* keep the sensor default on the first try */
+            if (brightness_step > 0)
+                cur = bright_floor + (DWORD)(attempt - 1) * (DWORD)brightness_step;
+            else if (capture_attempts <= 1)
+                cur = bright_floor;
             else
-                cur = PAM_BRIGHTNESS_START +
-                      (DWORD)(attempt - 2) * (DWORD)brightness_step;
+                cur = bright_floor +
+                      (PAM_BRIGHTNESS_MAX - bright_floor) *
+                      (DWORD)(attempt - 1) / (DWORD)(capture_attempts - 1);
 
-            if (do_set) {
-                if (cur > PAM_BRIGHTNESS_MAX)
-                    cur = PAM_BRIGHTNESS_MAX;
-                err = SGFPM_SetBrightness(hFPM, cur);
-                if (err != SGFDX_ERROR_NONE)
-                    syslog(LOG_AUTH | LOG_WARNING,
-                           "pam_sgfp: SetBrightness(%lu) failed (%lu), attempt %d/%d",
-                           cur, err, attempt, capture_attempts);
-            }
+            if (cur > PAM_BRIGHTNESS_MAX)   /* max bound check */
+                cur = PAM_BRIGHTNESS_MAX;
+
+            err = SGFPM_SetBrightness(hFPM, cur);
+            if (err != SGFDX_ERROR_NONE)
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: SetBrightness(%lu) failed (%lu), attempt %d/%d",
+                       cur, err, attempt, capture_attempts);
         }
 
         /* 7a. Capture */

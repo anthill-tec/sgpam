@@ -63,6 +63,7 @@ DWORD __wrap_SGFPM_GetDeviceInfo(HSGFPM hFPM, SGDeviceInfoParam *pInfo)
         pInfo->ImageWidth  = g_mock.devinfo_width;
         pInfo->ImageHeight = g_mock.devinfo_height;
         pInfo->ImageDPI    = g_mock.devinfo_dpi;
+        pInfo->Brightness  = g_mock.devinfo_brightness;
     }
     return g_mock.get_device_info_rv;
 }

@@ -42,6 +42,7 @@ typedef struct {
     DWORD   devinfo_width;         /* DeviceInfoParam.ImageWidth     */
     DWORD   devinfo_height;        /* DeviceInfoParam.ImageHeight    */
     DWORD   devinfo_dpi;           /* DeviceInfoParam.ImageDPI       */
+    DWORD   devinfo_brightness;    /* DeviceInfoParam.Brightness     */
     DWORD   max_template_size;     /* written by GetMaxTemplateSize  */
     DWORD   image_quality;         /* written by GetImageQuality     */
     BOOL    match_result;          /* written by MatchTemplate       */
