@@ -5,6 +5,7 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .B auth
 .RI [ sufficient | required ]
 .B pam_sgfp.so
+.RI [ retries = N ]
 .SH DESCRIPTION
 .B pam_sgfp
 is a PAM authentication module that captures a live fingerprint from
@@ -37,10 +38,68 @@ of enrolled fingers, for example:
 For legacy single-finger templates the generic prompt
 .RB \(lq "Place finger on scanner..." \(rq
 is shown instead.
-Capture uses a 10-second timeout.
+Capture uses a 10-second timeout per attempt.
+The module samples the sensor silently up to three times (see
+.BR retries ),
+accepting authentication on the first sample that matches and rejecting
+only after every attempt has failed.
+This makes a single prompt tolerant of a hurried or partial first finger
+placement, without asking the user to scan again.
 Matching uses security level
 .B SL_NORMAL
 (match score >= 80/199).
+.SH MODULE ARGUMENTS
+.TP
+.BI retries= N
+Number of times to silently sample the sensor before rejecting,
+an integer from 1 to 10 (default 3).
+Each attempt captures, extracts and matches; authentication succeeds on
+the first matching sample, and the module rejects only when all
+.I N
+attempts have failed.
+Raising this gives the user more time to settle a finger within a single
+prompt; lowering it to 1 restores the original single-shot behaviour.
+Note the 10-second capture timeout is
+.B per attempt,
+so the worst-case wait with no finger present is
+.IR N " \(mu 10"
+seconds.
+Values outside 1\(en10 are ignored and logged.
+.PP
+This is the only tunable.
+The sensor exposure escalation below is fully automatic and derived from it.
+.SH EXPOSURE ESCALATION
+On open the module enables the sensor's
+.B Smart Capture
+mode (the firmware's automatic gain control), which is the primary
+image-quality mechanism on these readers; capture quality collapses without
+it. Brightness escalation below is a secondary, complementary lever.
+.PP
+The module brightens the sensor LED automatically across the
+.B retries
+attempts, with no parameter to configure.
+On each authentication it reads the sensor's current LED brightness from
+the device and uses it as the escalation
+.I floor
+(falling back to 50 only if the readout is unusable); the floor is logged
+via
+.BR syslog (3)
+so the active range is visible.
+The brightness then scales evenly from that floor up to a ceiling of 100,
+spread across the attempts \(em both the number and the size of the steps
+are derived from
+.BR retries .
+The ceiling is hard-clamped at 100 (the SDK returns an error code rather
+than policing out-of-range values itself).
+.PP
+The first attempt always keeps the sensor's own exposure untouched and
+scaling begins on the second attempt, so a sensor that already works is
+left alone.
+For example, a sensor reporting 40 with
+.B retries=3
+samples at (sensor), 70, 100; the same sensor with
+.B retries=4
+samples at (sensor), 60, 80, 100.
 .SH MODULE TYPES PROVIDED
 .B auth
 .SH RETURN VALUES
@@ -140,26 +199,50 @@ auth  sufficient  pam_sgfp.so
 auth  include     system-auth
 .fi
 .RE
-.SS Display manager (SDDM)
-Add to
-.IR /etc/pam.d/sddm :
+.PP
+Allowing more samples (and finer automatic exposure steps) before falling
+through to the password rule:
 .PP
 .RS
 .nf
-auth  sufficient  pam_sgfp.so
+auth  sufficient  pam_sgfp.so retries=4
+auth  include     system-auth
+.fi
+.RE
+.SS Display manager (SDDM)
+Add to
+.IR /etc/pam.d/sddm .
+The package install hook configures graphical greeters (SDDM, GDM, greetd)
+with
+.B retries=4
+by default \(em a lock screen is fumbled more than a terminal \(em while
+.BR sudo (8)
+and console login keep the default of 3:
+.PP
+.RS
+.nf
+auth  sufficient  pam_sgfp.so retries=4
 auth  include     system-login
 .fi
 .RE
-.SS Console login
+.SS Console and greeter login
 Add to
-.IR /etc/pam.d/login :
+.IR /etc/pam.d/system-local-login
+\(em both console login
+.RB ( /etc/pam.d/login )
+and greetd
+.RB ( /etc/pam.d/greetd )
+include it, so one line covers both, placed after the
+.BR pam_nologin / pam_securetty
+gates and before the password include:
 .PP
 .RS
 .nf
-auth  sufficient  pam_sgfp.so
-auth  include     system-local-login
+auth        sufficient  pam_sgfp.so retries=4
+auth        include     system-login
 .fi
 .RE
+This is what the package install hook configures automatically.
 .SH SEE ALSO
 .BR sg_enroll (1),
 .BR pam (8),

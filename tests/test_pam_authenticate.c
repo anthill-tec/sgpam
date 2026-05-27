@@ -257,8 +257,217 @@ Test(pam_authenticate, multi_template_none_match, .init = setup,
 
     int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
     cr_assert_eq(rc, PAM_AUTH_ERR);
-    cr_assert_eq(g_mock.match_template_count, 2,
-                 "should try all templates before failing");
+    cr_assert_eq(g_mock.match_template_count, 2 * 3,
+                 "should try both templates on each of the 3 attempts");
+}
+
+/* ── Brightness floor comes from the device, not an argument ── */
+
+Test(pam_authenticate, first_attempt_keeps_sensor_default, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 0,
+                 "first attempt must keep the sensor's own exposure (no set)");
+}
+
+Test(pam_authenticate, brightness_arg_no_longer_recognized, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    /* brightness=N was removed: the floor is taken from the device readout, so
+       the argument is unknown and must not cause an attempt-1 SetBrightness. */
+    const char *args[] = {"brightness=70"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 0,
+                 "brightness= must be ignored; first attempt stays at sensor default");
+}
+
+/* ── Smart Capture (AGC) enable ───────────────────────────── */
+
+Test(pam_authenticate, enables_smart_capture, .init = setup, .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_geq(g_mock.write_data_count, 1,
+                  "Smart Capture must be enabled after open, got %d WriteData calls",
+                  g_mock.write_data_count);
+    cr_assert_eq(g_mock.last_write_index, 5,
+                 "Smart Capture is WriteData index 5, got %lu",
+                 g_mock.last_write_index);
+    cr_assert_eq(g_mock.last_write_value, 1,
+                 "Smart Capture must be enabled (value 1), got %lu",
+                 g_mock.last_write_value);
+}
+
+/* ── Quiet multi-sample retry (default 3 attempts) ────────── */
+
+Test(pam_authenticate, success_first_attempt_no_extra_captures, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.get_image_ex_count, 1,
+                 "must stop on first valid match, got %d captures",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, retry_succeeds_on_later_sample, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    /* First sample's match fails, second sample matches */
+    BOOL results[] = {FALSE, TRUE};
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS, "should accept on the second silent sample");
+    cr_assert_eq(g_mock.get_image_ex_count, 2,
+                 "should have re-captured once, got %d captures",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, rejects_only_after_all_attempts, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 3,
+                 "default should sample 3 times before rejecting, got %d",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, capture_timeout_retries_before_reject, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.get_image_ex_rv = SGFDX_ERROR_TIME_OUT;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 3,
+                 "capture timeout should retry up to 3 times, got %d",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, retries_arg_limits_attempts, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    const char *args[] = {"retries=2"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 2,
+                 "retries=2 should sample exactly twice, got %d",
+                 g_mock.get_image_ex_count);
+}
+
+/* ── Brightness escalation lock-step with retries ─────────── */
+
+Test(pam_authenticate, brightness_step_arg_no_longer_recognized, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 40;       /* readout -> escalation floor 40 */
+    g_mock.match_result = FALSE;          /* every attempt fails */
+
+    /* brightness_step was removed: escalation is always the adaptive ladder
+       derived from retries, so this arg is unknown and ignored. Floor 40 over
+       the default 3 attempts scales 40,70,100 (attempt 1 untouched) — NOT the
+       40,60,80 a fixed step of 20 would have produced. */
+    const char *args[] = {"brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "first attempt untouched; 2 later attempts set, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 100,
+                 "adaptive ladder ignores the step arg and reaches 100, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, adaptive_ladder_starts_at_sensor_readout, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 70;       /* sensor reports 70 -> ladder floor */
+    BOOL results[] = {FALSE, TRUE};       /* match on 2nd attempt */
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    /* retries=4, adaptive: floor 70 -> 100 over 4 rungs = 70,80,90,100.
+       Attempt 1 keeps the sensor default (70); attempt 2 sets 80 and matches.
+       last==80 proves the floor is the readout (70), not the 50 fallback. */
+    const char *args[] = {"retries=4"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 1,
+                 "matched on attempt 2, so exactly one set, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 80,
+                 "floor 70 step (100-70)/3=10 -> attempt 2 = 80, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, default_escalates_on_failure_only, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;          /* all attempts fail */
+
+    /* No args: adaptive ladder scales floor->100 across retries. Sensor
+       readout is 0 here (mock default) so floor falls back to 50; with 3
+       attempts the rungs are 50,75,100. Attempt 1 keeps the sensor default,
+       so only attempts 2 (75) and 3 (100) are set. */
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "first attempt untouched; 2 later attempts set, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 100,
+                 "adaptive ladder must reach 100 on the last attempt, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, escalation_stops_on_match, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.devinfo_brightness = 40;       /* readout -> floor 40 */
+    BOOL results[] = {FALSE, TRUE};       /* match on 2nd attempt */
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    /* Adaptive ladder from floor 40 over the default 3 attempts: 40,70,100.
+       Attempt 1 keeps the sensor default (40) and fails; attempt 2 sets 70 and
+       matches, so escalation stops there (the 100 rung is never reached). */
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 1,
+                 "only the matching attempt 2 sets brightness, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 70,
+                 "matched on attempt 2 at brightness 70, got %lu",
+                 g_mock.last_brightness);
 }
 
 Test(pam_authenticate, legacy_template_still_works, .init = setup,

@@ -2,6 +2,8 @@
 *.o
 *.so
 sg_enroll
+sg-drm-blank
+sg-probe
 
 # SDK / library files
 *.a
@@ -27,6 +29,9 @@ tests/test_pam_authenticate
 tests/test_sg_enroll
 tests/test_finger_names
 tests/test_load_templates
+tests/test_drm_blank
+tests/test_drm_blank_vkms
+tests/*.log
 
 # makepkg artifacts
 pkg/

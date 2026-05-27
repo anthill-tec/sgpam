@@ -12,6 +12,10 @@
  *   sg-drm-blank /dev/dri/card0    — target a specific device
  *   sg-drm-blank -v                — verbose logging for debugging
  *   sg-drm-blank --verbose /dev/dri/card0
+ *   sg-drm-blank --hold 2000       — after blanking, fork into the background
+ *                                    keeping the black framebuffer alive for
+ *                                    N ms so the next compositor can take over
+ *                                    without fbcon redrawing the TTY in the gap
  */
 
 #include <stdio.h>
@@ -21,11 +25,13 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
 static int verbose = 0;
+static int hold_ms = 0;   /* >0: keep black FB alive in a background child */
 
 #define VLOG(...) do { if (verbose) fprintf(stderr, __VA_ARGS__); } while (0)
 
@@ -181,13 +187,18 @@ static int blank_device(const char *path)
         /* Hold black frame briefly so display settles before handoff */
         usleep(200000);   /* 200 ms */
 
-        destroy_fb(fd, &fb);
+        /* In hold mode we deliberately leak the framebuffer: the kernel keeps
+         * it on scanout as long as the fd (or any dup) stays open, which we
+         * rely on to cover the gap until the next compositor's first frame. */
+        if (!hold_ms)
+            destroy_fb(fd, &fb);
         drmModeFreeCrtc(crtc);
     }
 
     drmModeFreeResources(res);
-    drmDropMaster(fd);
-    close(fd);
+    drmDropMaster(fd);   /* release master so the next compositor can take it */
+    if (!hold_ms)
+        close(fd);       /* in hold mode the fd is leaked on purpose (see above) */
 
     VLOG("  returning %d\n", blanked);
     return blanked;
@@ -195,20 +206,56 @@ static int blank_device(const char *path)
 
 /* ── main ────────────────────────────────────────────────────────────────── */
 
+/* Fork into a detached background process that just sleeps holding the DRM
+ * fds (and therefore the black framebuffers) open. The parent returns
+ * immediately so the caller can exec the next compositor. */
+static void linger_in_background(void)
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        VLOG("  fork FAILED: %s — exiting without hold\n", strerror(errno));
+        return;
+    }
+    if (pid > 0)
+        return;   /* parent: caller resumes and execs the compositor */
+
+    /* child: detach so we don't keep the caller's session/TTY busy */
+    setsid();
+    int devnull = open("/dev/null", O_RDWR);
+    if (devnull >= 0) {
+        dup2(devnull, STDIN_FILENO);
+        dup2(devnull, STDOUT_FILENO);
+        if (!verbose)
+            dup2(devnull, STDERR_FILENO);
+        if (devnull > 2)
+            close(devnull);
+    }
+
+    VLOG("sg-drm-blank: holding black framebuffer for %d ms\n", hold_ms);
+    usleep((useconds_t)hold_ms * 1000);
+    _exit(0);   /* kernel reclaims fds → FBs are destroyed last */
+}
+
 int main(int argc, char *argv[])
 {
     const char *device_path = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0)
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             verbose = 1;
-        else
+        } else if (strcmp(argv[i], "--hold") == 0 && i + 1 < argc) {
+            hold_ms = atoi(argv[++i]);
+            if (hold_ms < 0) hold_ms = 0;
+        } else {
             device_path = argv[i];
+        }
     }
 
     /* Explicit device path provided */
     if (device_path) {
         blank_device(device_path);
+        if (hold_ms > 0)
+            linger_in_background();
         return 0;   /* best-effort: never block boot */
     }
 
@@ -225,5 +272,8 @@ int main(int argc, char *argv[])
     }
 
     drmFreeDevices(devices, n);
+
+    if (hold_ms > 0)
+        linger_in_background();
     return 0;
 }

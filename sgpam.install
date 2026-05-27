@@ -3,6 +3,7 @@
 configure_pam() {
     local label="$1"
     local pam_file="$2"
+    local args="$3"   # optional pam_sgfp.so module arguments, e.g. "retries=4"
 
     # Skip if PAM file doesn't exist
     [ -f "$pam_file" ] || return 0
@@ -13,13 +14,17 @@ configure_pam() {
         return 0
     fi
 
+    # Build the module line, appending any module arguments
+    local module_line="auth        sufficient  pam_sgfp.so"
+    [ -n "$args" ] && module_line="$module_line $args"
+
     echo -n "  Configure fingerprint auth for $label? [y/N] " > /dev/tty
     read -r answer < /dev/tty
     case "$answer" in
         [yY]*)
             cp "$pam_file" "${pam_file}.sgpam.bak"
-            sed -i '0,/^auth[[:space:]]/{/pam_sgfp/!{s/^auth[[:space:]]/auth        sufficient  pam_sgfp.so\n&/}}' "$pam_file"
-            echo "  [done] $label configured (backup: ${pam_file}.sgpam.bak)"
+            sed -i "0,/^auth[[:space:]]/{/pam_sgfp/!{s|^auth[[:space:]]|${module_line}\n&|}}" "$pam_file"
+            echo "  [done] $label configured${args:+ ($args)} (backup: ${pam_file}.sgpam.bak)"
             ;;
         *)
             echo "  [skip] $label — skipped"
@@ -108,32 +113,34 @@ post_install() {
     echo "==> Configuring PAM for fingerprint authentication..."
     echo ""
 
-    # Detect active display manager
+    # Greeter / console logins get an extra capture attempt (a lock screen is
+    # fumbled more than a terminal you're already typing in); sudo keeps 3.
+    local greeter_args="retries=4"
+
+    # Console AND greetd logins both 'include system-local-login', so patch it
+    # once: pam_sgfp lands AFTER the outer nologin/securetty gates (which live
+    # in /etc/pam.d/{login,greetd}) and BEFORE the password include — fingerprint
+    # first, password fallback, no double-patch, no bypass of nologin/securetty.
+    configure_pam "console + greeter login" "/etc/pam.d/system-local-login" "$greeter_args"
+
+    # SDDM/GDM include system-login directly (not system-local-login), so they
+    # need their own line. greetd is already covered above via system-local-login.
     if systemctl is-active --quiet sddm.service; then
         echo "  Detected display manager: SDDM"
         echo "  Note: SDDM may not show the fingerprint prompt visually,"
         echo "        but authentication still works. Just place your finger."
-        echo ""
-        configure_pam "SDDM login" "/etc/pam.d/sddm"
+        configure_pam "SDDM login" "/etc/pam.d/sddm" "$greeter_args"
     elif systemctl is-active --quiet gdm.service; then
         echo "  Detected display manager: GDM"
-        echo ""
-        configure_pam "GDM login" "/etc/pam.d/gdm-password"
+        configure_pam "GDM login" "/etc/pam.d/gdm-password" "$greeter_args"
     elif systemctl is-active --quiet greetd.service; then
-        echo "  Detected display manager: greetd"
-        echo ""
-        configure_pam "greetd login" "/etc/pam.d/greetd"
+        echo "  Detected display manager: greetd (covered via system-local-login)"
         configure_greetd
-        echo ""
-        echo "  Note: Two new sessions are available in the ReGreet session picker:"
-        echo "    - Hyprland (sgpam)          — blanks screen between greeter and desktop"
-        echo "    - Hyprland (uwsm + sgpam)   — same, with uwsm session management"
     else
-        echo "  No supported display manager detected (checked: sddm, gdm, greetd)"
+        echo "  No graphical display manager detected (console login configured)"
     fi
 
     configure_pam "sudo" "/etc/pam.d/sudo"
-    configure_pam "TTY login" "/etc/pam.d/login"
 
     echo ""
     echo "==> Enrollment instructions:"
@@ -150,9 +157,6 @@ post_install() {
     echo "       sudo sg_enroll --remove <username> <finger-name>"
     echo "       sudo sg_enroll --remove <username>   # interactive"
     echo ""
-    echo "  4. Add the user to the 'secugen' group:"
-    echo "       sudo usermod -aG secugen <username>"
-    echo ""
     echo "  Templates are stored in /etc/security/sg_fingerprints/"
     echo ""
     echo "  See sg_enroll(1) and pam_sgfp(8) for details."
@@ -166,12 +170,14 @@ pre_remove() {
     echo ">>> sgpam: Removing fingerprint auth from PAM configuration..."
     echo ""
 
+    unconfigure_pam "console + greeter login" "/etc/pam.d/system-local-login"
     unconfigure_pam "SDDM login" "/etc/pam.d/sddm"
     unconfigure_pam "GDM login" "/etc/pam.d/gdm-password"
-    unconfigure_pam "greetd login" "/etc/pam.d/greetd"
     unconfigure_greetd
     unconfigure_pam "sudo" "/etc/pam.d/sudo"
-    unconfigure_pam "TTY login" "/etc/pam.d/login"
+    # Defensively clean direct patches from older sgpam layouts (no-op if absent)
+    unconfigure_pam "greetd login (legacy)" "/etc/pam.d/greetd"
+    unconfigure_pam "TTY login (legacy)" "/etc/pam.d/login"
 }
 
 post_remove() {

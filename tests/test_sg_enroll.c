@@ -203,6 +203,92 @@ Test(sg_enroll, invalid_security_level, .init = setup, .fini = teardown)
     cr_assert_eq(rc, 1, "should reject invalid security level");
 }
 
+/* ── Smart Capture (AGC) enable ───────────────────────────── */
+
+Test(sg_enroll, enrollment_enables_smart_capture, .init = setup, .fini = teardown)
+{
+    g_mock.match_result = TRUE;
+    g_mock.matching_score = 150;
+    g_mock.template_size = 400;
+
+    char *argv[] = {"sg_enroll", "jane", "right-index", NULL};
+    int rc = sg_enroll_main(3, argv);
+    cr_assert_eq(rc, 0, "expected success, got %d", rc);
+
+    cr_assert_geq(g_mock.write_data_count, 1,
+                  "Smart Capture must be enabled after open, got %d WriteData calls",
+                  g_mock.write_data_count);
+    cr_assert_eq(g_mock.last_write_index, 5,
+                 "Smart Capture is WriteData index 5, got %lu",
+                 g_mock.last_write_index);
+    cr_assert_eq(g_mock.last_write_value, 1,
+                 "Smart Capture must be enabled (value 1), got %lu",
+                 g_mock.last_write_value);
+}
+
+/* ── Brightness tests ─────────────────────────────────────── */
+
+Test(sg_enroll, enrollment_sets_default_brightness, .init = setup, .fini = teardown)
+{
+    g_mock.match_result = TRUE;
+    g_mock.matching_score = 150;
+    g_mock.template_size = 400;
+
+    char *argv[] = {"sg_enroll", "erin", "right-index", NULL};
+    int rc = sg_enroll_main(3, argv);
+    cr_assert_eq(rc, 0, "expected success, got %d", rc);
+
+    cr_assert_geq(g_mock.set_brightness_count, 1,
+                  "SetBrightness should be called before capture");
+    cr_assert_eq(g_mock.last_brightness, BRIGHTNESS_START,
+                 "default capture should use BRIGHTNESS_START (%d), got %lu",
+                 BRIGHTNESS_START, g_mock.last_brightness);
+}
+
+Test(sg_enroll, fixed_brightness_option, .init = setup, .fini = teardown)
+{
+    g_mock.match_result = TRUE;
+    g_mock.matching_score = 150;
+    g_mock.template_size = 400;
+
+    char *argv[] = {"sg_enroll", "-b", "80", "frank", "right-index", NULL};
+    int rc = sg_enroll_main(5, argv);
+    cr_assert_eq(rc, 0, "expected success with -b 80, got %d", rc);
+    cr_assert_eq(g_mock.last_brightness, 80,
+                 "fixed brightness should be 80, got %lu", g_mock.last_brightness);
+}
+
+Test(sg_enroll, invalid_brightness_rejected, .init = setup, .fini = teardown)
+{
+    char *argv[] = {"sg_enroll", "-b", "150", "grace", "right-index", NULL};
+    int rc = sg_enroll_main(5, argv);
+    cr_assert_eq(rc, 1, "should reject brightness > 100");
+}
+
+Test(sg_enroll, non_numeric_brightness_rejected, .init = setup, .fini = teardown)
+{
+    char *argv[] = {"sg_enroll", "-b", "bright", "heidi", "right-index", NULL};
+    int rc = sg_enroll_main(5, argv);
+    cr_assert_eq(rc, 1, "should reject non-numeric brightness");
+}
+
+Test(sg_enroll, brightness_escalates_on_failure, .init = setup, .fini = teardown)
+{
+    /* Every capture times out → escalation should raise brightness each retry */
+    g_mock.get_image_ex_rv = SGFDX_ERROR_TIME_OUT;
+
+    char *argv[] = {"sg_enroll", "ivan", "right-index", NULL};
+    int rc = sg_enroll_main(3, argv);
+    cr_assert_neq(rc, 0, "should fail after retries");
+
+    cr_assert_eq(g_mock.set_brightness_count, 3,
+                 "three capture attempts → three SetBrightness calls, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_gt(g_mock.last_brightness, BRIGHTNESS_START,
+                 "brightness should have escalated above %d, got %lu",
+                 BRIGHTNESS_START, g_mock.last_brightness);
+}
+
 /* ── Removal tests ────────────────────────────────────────── */
 
 Test(sg_enroll, remove_specific_finger, .init = setup, .fini = teardown)

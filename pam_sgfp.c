@@ -38,6 +38,26 @@
 #define SECURITY_LEVEL   SL_NORMAL        /* score ≥ 80 (SDK recommended) */
 #define TEMPLATE_FORMAT  TEMPLATE_FORMAT_SG400  /* 400 B, encrypted */
 
+/* Exposure escalation across the retry loop — fully automatic, no argument.
+   The escalation floor is read from the device on each authentication
+   (SGDeviceInfoParam.Brightness), falling back to PAM_BRIGHTNESS_START only if
+   the readout is unusable. The brightness then scales from that floor up to
+   PAM_BRIGHTNESS_MAX, spread evenly over the retry attempts: the number and
+   size of the rungs are both derived from retries, and the ceiling is hard-
+   clamped at 100. The first attempt always keeps the sensor's own exposure
+   untouched and scaling begins on the second attempt, so a sensor that already
+   works is left alone. */
+#define PAM_BRIGHTNESS_START 50    /* floor fallback when readout unusable */
+#define PAM_BRIGHTNESS_MAX   100   /* hard ceiling                         */
+
+/* Capture is sampled silently up to CAPTURE_ATTEMPTS times: authentication
+   succeeds on the first matching sample and only fails once every attempt is
+   exhausted. Tunable per service with the retries=N module argument. This
+   stops a hurried or partial first finger placement from rejecting outright. */
+#define CAPTURE_ATTEMPTS 3
+#define MAX_ATTEMPTS     10
+#define RETRIES_ARG      "retries="
+
 /* ── helpers ──────────────────────────────────────────────── */
 
 #define USERNAME_MAX 256  /* LOGIN_NAME_MAX on Linux */
@@ -234,7 +254,23 @@ static int load_templates(const char *username,
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                                    int argc, const char **argv)
 {
-    (void)flags; (void)argc; (void)argv;
+    (void)flags;
+
+    /* Parse module arguments: retries=N (1–MAX_ATTEMPTS) */
+    int   capture_attempts = CAPTURE_ATTEMPTS;
+    for (int i = 0; i < argc; i++) {
+        if (!argv[i])
+            continue;
+        if (strncmp(argv[i], RETRIES_ARG, sizeof(RETRIES_ARG) - 1) == 0) {
+            long v = strtol(argv[i] + sizeof(RETRIES_ARG) - 1, NULL, 10);
+            if (v >= 1 && v <= MAX_ATTEMPTS) {
+                capture_attempts = (int)v;
+            } else {
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: ignoring out-of-range retries '%s'", argv[i]);
+            }
+        }
+    }
 
     const char *username    = NULL;
     HSGFPM      hFPM        = NULL;
@@ -297,6 +333,15 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     }
     devOpened = 1;
 
+    /* 5b. Enable Smart Capture (firmware AGC) — WriteData index 5. This is the
+       dominant image-quality lever on the U20: with it on the sensor engages
+       automatic gain; with it off quality collapses. On by default, but set
+       explicitly so auth never runs with AGC off. Non-fatal if unsupported. */
+    err = SGFPM_WriteData(hFPM, 5, 1);
+    if (err != SGFDX_ERROR_NONE)
+        syslog(LOG_AUTH | LOG_WARNING,
+               "pam_sgfp: enabling Smart Capture failed (%lu)", err);
+
     /* 6. Query image dimensions */
     memset(&devInfo, 0, sizeof(devInfo));
     err = SGFPM_GetDeviceInfo(hFPM, &devInfo);
@@ -305,7 +350,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         goto cleanup;
     }
 
-    /* Guard against overflow: U20 is 260x300 = 78000; reject anything absurd */
+    /* Guard against overflow: U20 reports 300x400 = 120000; reject anything absurd */
     if (devInfo.ImageWidth == 0 || devInfo.ImageHeight == 0 ||
         devInfo.ImageWidth > 4096 || devInfo.ImageHeight > 4096) {
         syslog(LOG_AUTH | LOG_ERR,
@@ -323,40 +368,85 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
 
-    /* 7. Capture fingerprint */
+    /* 6b. Read back the sensor's current LED brightness and use it as the
+       escalation floor (falling back to PAM_BRIGHTNESS_START if the readout is
+       unusable). Logged so the active range is visible in the auth log. */
+    DWORD sensor_brightness = devInfo.Brightness;
+    DWORD bright_floor =
+        (sensor_brightness >= 1 && sensor_brightness <= PAM_BRIGHTNESS_MAX)
+            ? sensor_brightness
+            : PAM_BRIGHTNESS_START;
+
+    syslog(LOG_AUTH | LOG_INFO,
+           "pam_sgfp: LED brightness readout %lu; escalation floor %lu, ceiling %d",
+           sensor_brightness, bright_floor, PAM_BRIGHTNESS_MAX);
+
+    /* 7. Prompt once, then sample quietly up to capture_attempts times.
+       Each attempt captures, extracts and matches; the first match wins.
+       Capture/extract errors are non-fatal — they just consume an attempt —
+       so a hurried first placement does not reject the user outright. */
     pam_info(pamh, "%s", scanPrompt ? scanPrompt : "Place finger on scanner...");
-    err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
-    if (err != SGFDX_ERROR_NONE) {
-        syslog(LOG_AUTH | LOG_NOTICE,
-               "pam_sgfp: capture failed for '%s' (%lu)", username, err);
-        goto cleanup;
-    }
 
-    /* 8. Extract minutiae */
-    err = SGFPM_CreateTemplate(hFPM, NULL, imgBuf, liveTmpl);
-    if (err != SGFDX_ERROR_NONE) {
-        syslog(LOG_AUTH | LOG_NOTICE,
-               "pam_sgfp: template extraction failed (%lu)", err);
-        goto cleanup;
-    }
+    for (int attempt = 1;
+         attempt <= capture_attempts && result != PAM_SUCCESS;
+         attempt++) {
 
-    /* 9. Match against stored templates — first match wins */
-    for (int i = 0; i < tmplCount; i++) {
-        matched = FALSE;
-        err = SGFPM_MatchTemplate(hFPM, storedTmpls[i], liveTmpl,
-                                  SECURITY_LEVEL, &matched);
-        if (err == SGFDX_ERROR_NONE && matched) {
-            syslog(LOG_AUTH | LOG_INFO,
-                   "pam_sgfp: fingerprint accepted for user '%s' "
-                   "(template %d/%d)", username, i + 1, tmplCount);
-            result = PAM_SUCCESS;
-            break;
+        /* 7a0. Scale exposure from the floor toward the ceiling, spread evenly
+           across the retry attempts. The first attempt keeps the sensor's own
+           exposure; scaling starts on the second (so capture_attempts >= 2 here,
+           and the divisor is never zero). The last attempt lands on 100. */
+        if (attempt >= 2) {
+            DWORD cur = bright_floor +
+                        (PAM_BRIGHTNESS_MAX - bright_floor) *
+                        (DWORD)(attempt - 1) / (DWORD)(capture_attempts - 1);
+            if (cur > PAM_BRIGHTNESS_MAX)   /* max bound check */
+                cur = PAM_BRIGHTNESS_MAX;
+
+            err = SGFPM_SetBrightness(hFPM, cur);
+            if (err != SGFDX_ERROR_NONE)
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: SetBrightness(%lu) failed (%lu), attempt %d/%d",
+                       cur, err, attempt, capture_attempts);
+        }
+
+        /* 7a. Capture */
+        err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
+        if (err != SGFDX_ERROR_NONE) {
+            syslog(LOG_AUTH | LOG_NOTICE,
+                   "pam_sgfp: capture failed for '%s' (%lu), attempt %d/%d",
+                   username, err, attempt, capture_attempts);
+            continue;
+        }
+
+        /* 7b. Extract minutiae */
+        err = SGFPM_CreateTemplate(hFPM, NULL, imgBuf, liveTmpl);
+        if (err != SGFDX_ERROR_NONE) {
+            syslog(LOG_AUTH | LOG_NOTICE,
+                   "pam_sgfp: template extraction failed (%lu), attempt %d/%d",
+                   err, attempt, capture_attempts);
+            continue;
+        }
+
+        /* 7c. Match against stored templates — first match wins */
+        for (int i = 0; i < tmplCount; i++) {
+            matched = FALSE;
+            err = SGFPM_MatchTemplate(hFPM, storedTmpls[i], liveTmpl,
+                                      SECURITY_LEVEL, &matched);
+            if (err == SGFDX_ERROR_NONE && matched) {
+                syslog(LOG_AUTH | LOG_INFO,
+                       "pam_sgfp: fingerprint accepted for user '%s' "
+                       "(template %d/%d, attempt %d/%d)",
+                       username, i + 1, tmplCount, attempt, capture_attempts);
+                result = PAM_SUCCESS;
+                break;
+            }
         }
     }
+
     if (result != PAM_SUCCESS) {
         syslog(LOG_AUTH | LOG_NOTICE,
                "pam_sgfp: fingerprint rejected for user '%s' "
-               "(%d templates tried)", username, tmplCount);
+               "(%d templates, %d attempts)", username, tmplCount, capture_attempts);
     }
 
 cleanup:

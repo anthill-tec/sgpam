@@ -63,6 +63,7 @@ DWORD __wrap_SGFPM_GetDeviceInfo(HSGFPM hFPM, SGDeviceInfoParam *pInfo)
         pInfo->ImageWidth  = g_mock.devinfo_width;
         pInfo->ImageHeight = g_mock.devinfo_height;
         pInfo->ImageDPI    = g_mock.devinfo_dpi;
+        pInfo->Brightness  = g_mock.devinfo_brightness;
     }
     return g_mock.get_device_info_rv;
 }
@@ -85,6 +86,23 @@ DWORD __wrap_SGFPM_GetImageQuality(HSGFPM hFPM, DWORD width, DWORD height,
     if (quality)
         *quality = g_mock.image_quality;
     return g_mock.get_image_quality_rv;
+}
+
+DWORD __wrap_SGFPM_SetBrightness(HSGFPM hFPM, DWORD brightness)
+{
+    (void)hFPM;
+    g_mock.set_brightness_count++;
+    g_mock.last_brightness = brightness;
+    return g_mock.set_brightness_rv;
+}
+
+DWORD __wrap_SGFPM_WriteData(HSGFPM hFPM, unsigned char index, unsigned char data)
+{
+    (void)hFPM;
+    g_mock.write_data_count++;
+    g_mock.last_write_index = index;
+    g_mock.last_write_value = data;
+    return g_mock.write_data_rv;
 }
 
 /* ── Template operations ────────────────────────────────────── */
