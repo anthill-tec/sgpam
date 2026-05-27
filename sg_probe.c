@@ -94,13 +94,24 @@ static SGDeviceInfoParam read_info(HSGFPM h)
     return di;
 }
 
+/* Trim trailing spaces/tabs in place (the SDK pads DeviceSN to fixed width). */
+static void rstrip(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+        s[--n] = '\0';
+}
+
 static void print_info(const SGDeviceInfoParam *di, const char *tag)
 {
+    char sn[sizeof(di->DeviceSN) + 1];
+    snprintf(sn, sizeof sn, "%s", (const char *)di->DeviceSN);
+    rstrip(sn);
     printf("[%s] image=%lux%lu dpi=%lu  contrast=%lu brightness=%lu gain=%lu  "
            "fw=%lu sn=%s\n",
            tag, di->ImageWidth, di->ImageHeight, di->ImageDPI,
            di->Contrast, di->Brightness, di->Gain,
-           di->FWVersion, (const char *)di->DeviceSN);
+           di->FWVersion, sn);
 }
 
 static int cmd_info(HSGFPM h)
@@ -335,9 +346,9 @@ static unsigned find_secugen_usb_pid(const char *sn)
 
         if (sn && *sn) {
             snprintf(path, sizeof path, "/sys/bus/usb/devices/%s/serial", e->d_name);
-            if (read_sysfs_attr(path, s, sizeof s) == 0 && strcmp(s, sn) == 0) {
-                matched = pid;
-                break;
+            if (read_sysfs_attr(path, s, sizeof s) == 0) {
+                rstrip(s);
+                if (strcmp(s, sn) == 0) { matched = pid; break; }
             }
         }
     }
@@ -349,7 +360,7 @@ static unsigned find_secugen_usb_pid(const char *sn)
  * attached SecuGen device, then per device report info + Smart Capture support
  * + a recommended config (empirical; only FDU05/U20 validated so far). This is
  * the seed for an installer that auto-tunes per model. */
-static int cmd_caps(void)
+static int cmd_caps(int json)
 {
     HSGFPM h = NULL;
     DWORD err = SGFPM_Create(&h);
@@ -373,57 +384,99 @@ static int cmd_caps(void)
         return 1;
     }
 
-    printf("Enumerated %lu SecuGen device(s):\n", (unsigned long)ndevs);
-    for (DWORD i = 0; i < ndevs; i++)
-        printf("  [%lu] model=%-22s DevName=0x%02lX DevID=%lu DevType=%u SN=%s\n",
-               (unsigned long)i, model_name(list[i].DevName),
-               (unsigned long)list[i].DevName, (unsigned long)list[i].DevID,
-               (unsigned)list[i].DevType, (const char *)list[i].DevSN);
-    if (ndevs == 0)
-        printf("  (none — is a reader plugged in and accessible?)\n");
-    printf("\n");
+    if (json) {
+        printf("[");
+    } else {
+        printf("Enumerated %lu SecuGen device(s):\n", (unsigned long)ndevs);
+        for (DWORD i = 0; i < ndevs; i++) {
+            char sn[sizeof(list[i].DevSN) + 1];
+            snprintf(sn, sizeof sn, "%s", (const char *)list[i].DevSN);
+            rstrip(sn);
+            unsigned pid = find_secugen_usb_pid(sn);
+            const char *m = pid ? usb_pid_model(pid) : NULL;
+            printf("  [%lu] model=%-18s usb=%04x:%04x DevID=%lu SN=%s\n",
+                   (unsigned long)i, m ? m : "unknown", SECUGEN_VID, pid,
+                   (unsigned long)list[i].DevID, sn);
+        }
+        if (ndevs == 0)
+            printf("  (none — is a reader plugged in and accessible?)\n");
+        printf("\n");
+    }
 
+    int emitted = 0;
     for (DWORD i = 0; i < ndevs; i++) {
-        printf("=== Device %lu: %s ===\n",
-               (unsigned long)i, model_name(list[i].DevName));
         err = SGFPM_OpenDevice(h, i);
         if (err != SGFDX_ERROR_NONE) {
-            printf("  OpenDevice(%lu) failed: %lu (%s)\n",
-                   (unsigned long)i, err, err_name(err));
+            if (!json)
+                printf("=== Device %lu ===\n  OpenDevice(%lu) failed: %lu (%s)\n\n",
+                       (unsigned long)i, (unsigned long)i, err, err_name(err));
             continue;
         }
 
         SGDeviceInfoParam di = read_info(h);
-        print_info(&di, "  info");
         DWORD maxt = 0;
         SGFPM_GetMaxTemplateSize(h, &maxt);
-        printf("  max_template_size=%lu\n", maxt);
-
         DWORD werr = SGFPM_WriteData(h, 5, 1);   /* Smart Capture support probe */
-        printf("  Smart Capture (WriteData(5,1)): rc=%lu (%s)%s\n",
-               werr, err_name(werr),
-               werr == SGFDX_ERROR_NONE ? "" : "  <-- not supported on this model");
 
-        /* Identify the model by USB VID:PID (canonical) rather than the SDK's
-         * DevName, which returns UNKNOWN for the U20. Match by serial. */
-        unsigned pid = find_secugen_usb_pid((const char *)di.DeviceSN);
+        char sn[sizeof(di.DeviceSN) + 1];
+        snprintf(sn, sizeof sn, "%s", (const char *)di.DeviceSN);
+        rstrip(sn);
+
+        /* Identify the model by USB VID:PID (canonical), matched by serial —
+         * the SDK's DevName returns UNKNOWN for the U20. */
+        unsigned pid = find_secugen_usb_pid(sn);
         const char *usbmodel = pid ? usb_pid_model(pid) : NULL;
-        printf("  USB id: %04x:%04x -> %s\n", SECUGEN_VID, pid,
-               usbmodel ? usbmodel : (pid ? "unknown SecuGen PID" : "no USB match"));
-        printf("  (SDK DevName=0x%02lX %s [unreliable]; geometry %lux%lu @ %lu DPI)\n",
-               (unsigned long)list[i].DevName, model_name(list[i].DevName),
-               di.ImageWidth, di.ImageHeight, di.ImageDPI);
+        int validated = (pid == 0x2200);   /* U20 (FDU05) */
 
-        if (pid == 0x2200)   /* U20 (FDU05) */
-            printf("  recommended: smart_capture=on, brightness floor=readout(%lu), "
-                   "retries=4 [VALIDATED]\n", di.Brightness);
-        else
-            printf("  recommended: smart_capture=on, retries>=3 "
-                   "[UNVALIDATED model — run capture/qsweep to characterize]\n");
+        if (json) {
+            printf("%s\n  {\n", emitted ? "," : "");
+            printf("    \"index\": %lu,\n", (unsigned long)i);
+            printf("    \"serial\": \"%s\",\n", sn);
+            printf("    \"usb_vid\": \"%04x\",\n", SECUGEN_VID);
+            printf("    \"usb_pid\": \"%04x\",\n", pid);
+            printf("    \"model\": \"%s\",\n", usbmodel ? usbmodel : "unknown");
+            printf("    \"image_width\": %lu,\n", (unsigned long)di.ImageWidth);
+            printf("    \"image_height\": %lu,\n", (unsigned long)di.ImageHeight);
+            printf("    \"dpi\": %lu,\n", (unsigned long)di.ImageDPI);
+            printf("    \"brightness\": %lu,\n", (unsigned long)di.Brightness);
+            printf("    \"contrast\": %lu,\n", (unsigned long)di.Contrast);
+            printf("    \"gain\": %lu,\n", (unsigned long)di.Gain);
+            printf("    \"fw_version\": %lu,\n", (unsigned long)di.FWVersion);
+            printf("    \"max_template_size\": %lu,\n", (unsigned long)maxt);
+            printf("    \"smart_capture_supported\": %s,\n",
+                   werr == SGFDX_ERROR_NONE ? "true" : "false");
+            printf("    \"validated\": %s,\n", validated ? "true" : "false");
+            printf("    \"recommended\": { \"smart_capture\": true, "
+                   "\"brightness_floor\": %lu, \"retries\": %d }\n",
+                   (unsigned long)di.Brightness, validated ? 4 : 3);
+            printf("  }");
+        } else {
+            printf("=== Device %lu: %s ===\n", (unsigned long)i,
+                   usbmodel ? usbmodel : "unknown model");
+            print_info(&di, "  info");
+            printf("  max_template_size=%lu\n", (unsigned long)maxt);
+            printf("  Smart Capture (WriteData(5,1)): rc=%lu (%s)%s\n",
+                   werr, err_name(werr),
+                   werr == SGFDX_ERROR_NONE ? "" : "  <-- not supported on this model");
+            printf("  USB id: %04x:%04x -> %s\n", SECUGEN_VID, pid,
+                   usbmodel ? usbmodel : (pid ? "unknown SecuGen PID" : "no USB match"));
+            printf("  (SDK DevName=0x%02lX %s [unreliable])\n",
+                   (unsigned long)list[i].DevName, model_name(list[i].DevName));
+            if (validated)
+                printf("  recommended: smart_capture=on, brightness floor=readout(%lu), "
+                       "retries=4 [VALIDATED]\n", (unsigned long)di.Brightness);
+            else
+                printf("  recommended: smart_capture=on, retries>=3 "
+                       "[UNVALIDATED model — run capture/qsweep to characterize]\n");
+            printf("\n");
+        }
 
+        emitted++;
         SGFPM_CloseDevice(h);
-        printf("\n");
     }
+
+    if (json)
+        printf("%s]\n", emitted ? "\n" : "");
 
     SGFPM_Terminate(h);
     return 0;
@@ -441,8 +494,9 @@ static void usage(const char *argv0)
         "  watch [count] [ms]      poll device info to spot autonomous drift (default 10 @ 500ms)\n"
         "  qsweep [start end step] Smart Capture ON, sweep brightness over ONE held finger,\n"
         "                          print quality at each level (default 20 100 20)\n"
-        "  caps                    enumerate all attached readers (model, SN), per-device\n"
-        "                          info + Smart Capture support + recommended config\n",
+        "  caps [json]             enumerate all attached readers (model via USB PID, SN),\n"
+        "                          per-device info + Smart Capture + recommended config;\n"
+        "                          'json' emits a machine-readable array for the installer\n",
         argv0);
 }
 
@@ -453,7 +507,7 @@ int main(int argc, char *argv[])
     /* caps is model-agnostic: it inits SG_DEV_AUTO and enumerates, so it does
      * not use the FDU05 single-device open path the other commands share. */
     if (strcmp(argv[1], "caps") == 0)
-        return cmd_caps();
+        return cmd_caps(argc > 2 && strcmp(argv[2], "json") == 0);
 
     HSGFPM h = open_device();
     int rc = 1;
