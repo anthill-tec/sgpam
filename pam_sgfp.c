@@ -38,6 +38,10 @@
 #define SECURITY_LEVEL   SL_NORMAL        /* score ≥ 80 (SDK recommended) */
 #define TEMPLATE_FORMAT  TEMPLATE_FORMAT_SG400  /* 400 B, encrypted */
 
+/* Optional module argument: brightness=N (0–100) sets sensor exposure.
+   Match the value that produced good quality at enrollment (sg_enroll -b). */
+#define BRIGHTNESS_ARG   "brightness="
+
 /* ── helpers ──────────────────────────────────────────────── */
 
 #define USERNAME_MAX 256  /* LOGIN_NAME_MAX on Linux */
@@ -234,7 +238,24 @@ static int load_templates(const char *username,
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                                    int argc, const char **argv)
 {
-    (void)flags; (void)argc; (void)argv;
+    (void)flags;
+
+    /* Parse module arguments: brightness=N (0–100) */
+    DWORD brightness     = 0;
+    int   have_brightness = 0;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i] && strncmp(argv[i], BRIGHTNESS_ARG,
+                               sizeof(BRIGHTNESS_ARG) - 1) == 0) {
+            long v = strtol(argv[i] + sizeof(BRIGHTNESS_ARG) - 1, NULL, 10);
+            if (v >= 0 && v <= 100) {
+                brightness = (DWORD)v;
+                have_brightness = 1;
+            } else {
+                syslog(LOG_AUTH | LOG_WARNING,
+                       "pam_sgfp: ignoring out-of-range brightness '%s'", argv[i]);
+            }
+        }
+    }
 
     const char *username    = NULL;
     HSGFPM      hFPM        = NULL;
@@ -322,6 +343,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
+
+    /* 6b. Apply sensor brightness if configured (brightness=N module arg) */
+    if (have_brightness) {
+        err = SGFPM_SetBrightness(hFPM, brightness);
+        if (err != SGFDX_ERROR_NONE)
+            syslog(LOG_AUTH | LOG_WARNING,
+                   "pam_sgfp: SetBrightness(%lu) failed (%lu)", brightness, err);
+    }
 
     /* 7. Capture fingerprint */
     pam_info(pamh, "%s", scanPrompt ? scanPrompt : "Place finger on scanner...");

@@ -99,6 +99,7 @@ WRAP_SDK = -Wl,--wrap=SGFPM_Create \
            -Wl,--wrap=SGFPM_GetMaxTemplateSize \
            -Wl,--wrap=SGFPM_GetImageEx \
            -Wl,--wrap=SGFPM_GetImageQuality \
+           -Wl,--wrap=SGFPM_SetBrightness \
            -Wl,--wrap=SGFPM_CreateTemplate \
            -Wl,--wrap=SGFPM_GetTemplateSize \
            -Wl,--wrap=SGFPM_MatchTemplate \

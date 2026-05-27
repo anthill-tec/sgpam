@@ -5,6 +5,7 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .B auth
 .RI [ sufficient | required ]
 .B pam_sgfp.so
+.RI [ brightness = N ]
 .SH DESCRIPTION
 .B pam_sgfp
 is a PAM authentication module that captures a live fingerprint from
@@ -41,6 +42,24 @@ Capture uses a 10-second timeout.
 Matching uses security level
 .B SL_NORMAL
 (match score >= 80/199).
+.SH MODULE ARGUMENTS
+.TP
+.BI brightness= N
+Set the sensor exposure (LED brightness) to
+.IR N ,
+an integer from 0 to 100, before capturing.
+This should match the brightness that produced good image quality during
+enrollment (see the
+.B \-b
+option of
+.BR sg_enroll (1)).
+Brightness is a live device setting and is
+.B not
+stored in the template, so a mismatch between the enrollment brightness
+and the login brightness degrades matching.
+Values outside 0\(en100 are ignored and logged via
+.BR syslog (3).
+If the argument is omitted, the sensor's default exposure is used.
 .SH MODULE TYPES PROVIDED
 .B auth
 .SH RETURN VALUES
@@ -137,6 +156,16 @@ before the existing password rule:
 .RS
 .nf
 auth  sufficient  pam_sgfp.so
+auth  include     system-auth
+.fi
+.RE
+.PP
+With a fixed sensor brightness (matching
+.B "sg_enroll -b 85" ):
+.PP
+.RS
+.nf
+auth  sufficient  pam_sgfp.so brightness=85
 auth  include     system-auth
 .fi
 .RE

@@ -87,6 +87,14 @@ DWORD __wrap_SGFPM_GetImageQuality(HSGFPM hFPM, DWORD width, DWORD height,
     return g_mock.get_image_quality_rv;
 }
 
+DWORD __wrap_SGFPM_SetBrightness(HSGFPM hFPM, DWORD brightness)
+{
+    (void)hFPM;
+    g_mock.set_brightness_count++;
+    g_mock.last_brightness = brightness;
+    return g_mock.set_brightness_rv;
+}
+
 /* ── Template operations ────────────────────────────────────── */
 
 DWORD __wrap_SGFPM_GetMaxTemplateSize(HSGFPM hFPM, DWORD *size)

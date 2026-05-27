@@ -42,6 +42,13 @@
 #define DEFAULT_SECURITY SL_NORMAL        /* default security level      */
 #define TEMPLATE_FORMAT  TEMPLATE_FORMAT_SG400
 
+/* Sensor exposure (LED) brightness, 0–100. Higher helps dry/faint fingers.
+ * Without -b, enrollment starts at BRIGHTNESS_START and auto-escalates by
+ * BRIGHTNESS_STEP up to BRIGHTNESS_MAX when a capture fails the quality gate. */
+#define BRIGHTNESS_START 50
+#define BRIGHTNESS_STEP  15
+#define BRIGHTNESS_MAX   100
+
 /* ── utilities ────────────────────────────────────────────── */
 
 #define USERNAME_MAX 256  /* LOGIN_NAME_MAX on Linux */
@@ -70,14 +77,34 @@ static void die(const char *msg, DWORD code)
     exit(1);
 }
 
+/* Parse a 0–100 brightness level. Returns 0 on success, -1 on invalid. */
+static int parse_brightness(const char *s, DWORD *out)
+{
+    if (!s || !*s)
+        return -1;
+    char *end = NULL;
+    long v = strtol(s, &end, 10);
+    if (*end != '\0' || v < 0 || v > 100)
+        return -1;
+    if (out)
+        *out = (DWORD)v;
+    return 0;
+}
+
 static int capture_and_extract(HSGFPM hFPM,
                                 BYTE *imgBuf, DWORD imgW, DWORD imgH,
-                                BYTE *tmplBuf, const char *prompt)
+                                BYTE *tmplBuf, const char *prompt,
+                                DWORD brightness)
 {
     printf("%s\n", prompt);
     fflush(stdout);
 
-    DWORD err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
+    DWORD err = SGFPM_SetBrightness(hFPM, brightness);
+    if (err != SGFDX_ERROR_NONE)
+        fprintf(stderr, "  Warning: could not set brightness %lu (err %lu)\n",
+                brightness, err);
+
+    err = SGFPM_GetImageEx(hFPM, imgBuf, CAPTURE_TIMEOUT, NULL, CAPTURE_QUALITY);
     if (err != SGFDX_ERROR_NONE) {
         fprintf(stderr, "  Capture failed (err %lu). Try again.\n", err);
         return -1;
@@ -85,7 +112,7 @@ static int capture_and_extract(HSGFPM hFPM,
 
     DWORD quality = 0;
     SGFPM_GetImageQuality(hFPM, imgW, imgH, imgBuf, &quality);
-    printf("  Image quality: %lu/100\n", quality);
+    printf("  Image quality: %lu/100 (brightness %lu)\n", quality, brightness);
     if (quality < CAPTURE_QUALITY) {
         fprintf(stderr, "  Quality too low (%lu). Please try again.\n", quality);
         return -1;
@@ -97,6 +124,34 @@ static int capture_and_extract(HSGFPM hFPM,
         return -1;
     }
     return 0;
+}
+
+/*
+ * Capture one sample, retrying up to 3 times. Unless brightness is fixed
+ * (user passed -b), a failed attempt raises *brightness by BRIGHTNESS_STEP
+ * (capped at BRIGHTNESS_MAX) before retrying — this is the lever that
+ * actually pushes a dry/faint finger's image quality off a low plateau.
+ * The escalated value is carried back via *brightness so later captures
+ * (sample 2, verification) reuse what worked. Returns 0 on success.
+ */
+static int capture_with_escalation(HSGFPM hFPM, BYTE *imgBuf,
+                                   DWORD imgW, DWORD imgH, BYTE *tmplBuf,
+                                   const char *prompt,
+                                   DWORD *brightness, int brightness_fixed)
+{
+    int ok = 0;
+    for (int i = 0; i < 3 && !ok; i++) {
+        ok = (capture_and_extract(hFPM, imgBuf, imgW, imgH, tmplBuf,
+                                  prompt, *brightness) == 0);
+        if (!ok && !brightness_fixed && *brightness < BRIGHTNESS_MAX) {
+            *brightness += BRIGHTNESS_STEP;
+            if (*brightness > BRIGHTNESS_MAX)
+                *brightness = BRIGHTNESS_MAX;
+            printf("  Raising scanner brightness to %lu and retrying...\n",
+                   *brightness);
+        }
+    }
+    return ok ? 0 : -1;
 }
 
 /* ── finger selection ─────────────────────────────────────── */
@@ -287,13 +342,15 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
         "Usage:\n"
-        "  sudo %s <username> [finger-name] [-s LEVEL]\n"
+        "  sudo %s <username> [finger-name] [-s LEVEL] [-b BRIGHTNESS]\n"
         "  sudo %s --list <username>\n"
         "  sudo %s --remove <username> [finger-name]\n"
         "\n"
         "Options:\n"
         "  -s LEVEL   Security level: lowest, lower, low, below_normal,\n"
         "             normal (default), above_normal, high, higher, highest\n"
+        "  -b BRIGHTNESS  Sensor exposure 0-100 (fixed). Without -b, brightness\n"
+        "             starts at 50 and auto-escalates when quality is low.\n"
         "  --list     List enrolled fingers\n"
         "  --remove   Remove an enrolled finger (use 'legacy' for old templates)\n"
         "\n"
@@ -311,6 +368,7 @@ int main(int argc, char *argv[])
     const char *username = NULL;
     const char *finger = NULL;
     const char *sec_name = NULL;
+    const char *bright_name = NULL;
     int list_mode = 0;
     int remove_mode = 0;
 
@@ -325,6 +383,13 @@ int main(int argc, char *argv[])
                 return 1;
             }
             sec_name = argv[++i];
+        } else if (strcmp(argv[i], "-b") == 0 ||
+                   strcmp(argv[i], "--brightness") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Option %s requires an argument\n", argv[i]);
+                return 1;
+            }
+            bright_name = argv[++i];
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -388,6 +453,20 @@ int main(int argc, char *argv[])
             print_usage(argv[0]);
             return 1;
         }
+    }
+
+    /* Resolve sensor brightness. -b pins a fixed value (no auto-escalation);
+       otherwise start low and let capture_with_escalation climb on failure. */
+    DWORD brightness = BRIGHTNESS_START;
+    int brightness_fixed = 0;
+    if (bright_name) {
+        if (parse_brightness(bright_name, &brightness) != 0) {
+            fprintf(stderr, "Invalid brightness '%s' — must be 0–100\n",
+                    bright_name);
+            print_usage(argv[0]);
+            return 1;
+        }
+        brightness_fixed = 1;
     }
 
     /* Validate or interactively select finger */
@@ -474,32 +553,36 @@ int main(int argc, char *argv[])
         goto cleanup;
     }
 
-    printf("Enrolling '%s' finger '%s' (security: %s, threshold: %lu/199)\n\n",
-           username, finger, SECURITY_NAMES[securityLevel], scoreThreshold);
+    if (brightness_fixed)
+        printf("Enrolling '%s' finger '%s' (security: %s, threshold: %lu/199, "
+               "brightness: %lu fixed)\n\n",
+               username, finger, SECURITY_NAMES[securityLevel], scoreThreshold,
+               brightness);
+    else
+        printf("Enrolling '%s' finger '%s' (security: %s, threshold: %lu/199, "
+               "brightness: %lu auto)\n\n",
+               username, finger, SECURITY_NAMES[securityLevel], scoreThreshold,
+               brightness);
 
 recapture:
-    /* Capture sample 1 — retry up to 3 times */
+    /* Capture sample 1 — retry up to 3 times, escalating brightness */
     ;
-    int ok = 0;
-    for (int i = 0; i < 3 && !ok; i++) {
-        ok = (capture_and_extract(hFPM, imgBuf,
-                                  devInfo.ImageWidth, devInfo.ImageHeight,
-                                  tmpl1,
-                                  "-> Place finger on scanner (sample 1)...") == 0);
-    }
+    int ok = (capture_with_escalation(hFPM, imgBuf,
+                                      devInfo.ImageWidth, devInfo.ImageHeight,
+                                      tmpl1,
+                                      "-> Place finger on scanner (sample 1)...",
+                                      &brightness, brightness_fixed) == 0);
     if (!ok) { fprintf(stderr, "Failed to capture sample 1.\n"); goto cleanup; }
 
     printf("  Sample 1 captured. Remove finger and wait...\n\n");
     sleep(2);
 
-    /* Capture sample 2 — retry up to 3 times */
-    ok = 0;
-    for (int i = 0; i < 3 && !ok; i++) {
-        ok = (capture_and_extract(hFPM, imgBuf,
+    /* Capture sample 2 — reuses the brightness that worked for sample 1 */
+    ok = (capture_with_escalation(hFPM, imgBuf,
                                   devInfo.ImageWidth, devInfo.ImageHeight,
                                   tmpl2,
-                                  "-> Place the same finger again (sample 2)...") == 0);
-    }
+                                  "-> Place the same finger again (sample 2)...",
+                                  &brightness, brightness_fixed) == 0);
     if (!ok) { fprintf(stderr, "Failed to capture sample 2.\n"); goto cleanup; }
 
     /* Confirm the two samples match at the chosen security level */
@@ -580,13 +663,11 @@ recapture:
 
         verifyTmpl = malloc(maxTmplSize);
         if (verifyTmpl) {
-            ok = 0;
-            for (int i = 0; i < 3 && !ok; i++) {
-                ok = (capture_and_extract(hFPM, imgBuf,
+            ok = (capture_with_escalation(hFPM, imgBuf,
                                           devInfo.ImageWidth, devInfo.ImageHeight,
                                           verifyTmpl,
-                                          "-> Scan finger for verification...") == 0);
-            }
+                                          "-> Scan finger for verification...",
+                                          &brightness, brightness_fixed) == 0);
 
             if (ok) {
                 /* Load the saved template from disk and match */

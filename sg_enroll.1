@@ -5,6 +5,8 @@ sg_enroll \- enroll a fingerprint for PAM authentication
 .B sg_enroll
 .RB [ \-s
 .IR level ]
+.RB [ \-b
+.IR brightness ]
 .I username
 .RI [ finger-name ]
 .br
@@ -57,6 +59,26 @@ Valid levels (case-insensitive):
 .BR higher " (120),"
 .BR highest " (140)."
 The number in parentheses is the minimum match score (out of 199).
+.TP
+.BI \-b " brightness"
+Sensor exposure (LED brightness), an integer from 0 to 100.
+Higher values help dry or faint fingers that plateau at a low image
+quality.
+When
+.B \-b
+is given the value is fixed for the whole session.
+When it is omitted, enrollment starts at brightness 50 and
+.B auto-escalates
+\(em each failed capture raises the brightness by 15 (up to 100) and
+retries, and the value that succeeds is reused for the second sample and
+the post-save verification.
+The brightness in effect is printed alongside each image-quality reading.
+.IP
+For fingerprint login to match reliably, set the same brightness in the
+PAM module via the
+.B brightness=N
+argument \(em see
+.BR pam_sgfp (8).
 .TP
 .B \-\-list
 List enrolled fingers for the given user.
@@ -187,6 +209,14 @@ Enroll with high security (score >= 100):
 .RS
 .nf
 sudo sg_enroll -s high alice left-thumb
+.fi
+.RE
+.PP
+Enroll a dry finger at a fixed high brightness:
+.PP
+.RS
+.nf
+sudo sg_enroll -b 85 alice right-index
 .fi
 .RE
 .PP

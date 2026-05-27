@@ -261,6 +261,47 @@ Test(pam_authenticate, multi_template_none_match, .init = setup,
                  "should try all templates before failing");
 }
 
+/* ── Brightness module argument ───────────────────────────── */
+
+Test(pam_authenticate, brightness_arg_applied, .init = setup, .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    const char *args[] = {"brightness=70"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 1,
+                 "SetBrightness should be called once");
+    cr_assert_eq(g_mock.last_brightness, 70,
+                 "brightness should be 70, got %lu", g_mock.last_brightness);
+}
+
+Test(pam_authenticate, no_brightness_arg_skips_setbrightness, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.set_brightness_count, 0,
+                 "SetBrightness must not be called without brightness= arg");
+}
+
+Test(pam_authenticate, out_of_range_brightness_ignored, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    const char *args[] = {"brightness=200"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_SUCCESS, "auth should still succeed");
+    cr_assert_eq(g_mock.set_brightness_count, 0,
+                 "out-of-range brightness must be ignored");
+}
+
 Test(pam_authenticate, legacy_template_still_works, .init = setup,
      .fini = teardown)
 {
