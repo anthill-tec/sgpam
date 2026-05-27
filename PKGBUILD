@@ -6,8 +6,10 @@ pkgdesc="SecuGen U20 fingerprint authentication for sudo, TTY and greeter login 
 arch=('x86_64')
 url="https://github.com/anthill-tec/sgpam"
 license=('MIT')
-depends=('secugen-fdx-driver' 'pam')
-makedepends=('secugen-fdx-sdk' 'criterion' 'libdrm')
+# Runtime: driver (libsgfplib.so), pam (libpam), libdrm (sg-drm-blank -> libdrm.so.2),
+# gcc-libs (libstdc++). The SDK is build-only (headers/static libs/samples).
+depends=('secugen-fdx-driver' 'pam' 'libdrm' 'gcc-libs')
+makedepends=('secugen-fdx-sdk' 'criterion')
 optdepends=(
     'greetd: Wayland-native login manager with fingerprint prompt support'
     'greetd-regreet: GTK4 greeter for greetd with theming support'
