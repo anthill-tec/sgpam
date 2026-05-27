@@ -6,6 +6,7 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .RI [ sufficient | required ]
 .B pam_sgfp.so
 .RI [ brightness = N ]
+.RI [ retries = N ]
 .SH DESCRIPTION
 .B pam_sgfp
 is a PAM authentication module that captures a live fingerprint from
@@ -38,7 +39,13 @@ of enrolled fingers, for example:
 For legacy single-finger templates the generic prompt
 .RB \(lq "Place finger on scanner..." \(rq
 is shown instead.
-Capture uses a 10-second timeout.
+Capture uses a 10-second timeout per attempt.
+The module samples the sensor silently up to three times (see
+.BR retries ),
+accepting authentication on the first sample that matches and rejecting
+only after every attempt has failed.
+This makes a single prompt tolerant of a hurried or partial first finger
+placement, without asking the user to scan again.
 Matching uses security level
 .B SL_NORMAL
 (match score >= 80/199).
@@ -60,6 +67,22 @@ and the login brightness degrades matching.
 Values outside 0\(en100 are ignored and logged via
 .BR syslog (3).
 If the argument is omitted, the sensor's default exposure is used.
+.TP
+.BI retries= N
+Number of times to silently sample the sensor before rejecting,
+an integer from 1 to 10 (default 3).
+Each attempt captures, extracts and matches; authentication succeeds on
+the first matching sample, and the module rejects only when all
+.I N
+attempts have failed.
+Raising this gives the user more time to settle a finger within a single
+prompt; lowering it to 1 restores the original single-shot behaviour.
+Note the 10-second capture timeout is
+.B per attempt,
+so the worst-case wait with no finger present is
+.IR N " \(mu 10"
+seconds.
+Values outside 1\(en10 are ignored and logged.
 .SH MODULE TYPES PROVIDED
 .B auth
 .SH RETURN VALUES

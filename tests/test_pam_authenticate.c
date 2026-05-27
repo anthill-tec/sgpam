@@ -257,8 +257,8 @@ Test(pam_authenticate, multi_template_none_match, .init = setup,
 
     int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
     cr_assert_eq(rc, PAM_AUTH_ERR);
-    cr_assert_eq(g_mock.match_template_count, 2,
-                 "should try all templates before failing");
+    cr_assert_eq(g_mock.match_template_count, 2 * 3,
+                 "should try both templates on each of the 3 attempts");
 }
 
 /* ── Brightness module argument ───────────────────────────── */
@@ -300,6 +300,77 @@ Test(pam_authenticate, out_of_range_brightness_ignored, .init = setup,
     cr_assert_eq(rc, PAM_SUCCESS, "auth should still succeed");
     cr_assert_eq(g_mock.set_brightness_count, 0,
                  "out-of-range brightness must be ignored");
+}
+
+/* ── Quiet multi-sample retry (default 3 attempts) ────────── */
+
+Test(pam_authenticate, success_first_attempt_no_extra_captures, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_eq(g_mock.get_image_ex_count, 1,
+                 "must stop on first valid match, got %d captures",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, retry_succeeds_on_later_sample, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    /* First sample's match fails, second sample matches */
+    BOOL results[] = {FALSE, TRUE};
+    g_mock.match_results = results;
+    g_mock.match_results_len = 2;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS, "should accept on the second silent sample");
+    cr_assert_eq(g_mock.get_image_ex_count, 2,
+                 "should have re-captured once, got %d captures",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, rejects_only_after_all_attempts, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 3,
+                 "default should sample 3 times before rejecting, got %d",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, capture_timeout_retries_before_reject, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.get_image_ex_rv = SGFDX_ERROR_TIME_OUT;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 3,
+                 "capture timeout should retry up to 3 times, got %d",
+                 g_mock.get_image_ex_count);
+}
+
+Test(pam_authenticate, retries_arg_limits_attempts, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;
+
+    const char *args[] = {"retries=2"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.get_image_ex_count, 2,
+                 "retries=2 should sample exactly twice, got %d",
+                 g_mock.get_image_ex_count);
 }
 
 Test(pam_authenticate, legacy_template_still_works, .init = setup,
