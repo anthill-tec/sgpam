@@ -22,9 +22,11 @@ Target: x86_64, SecuGen FDx SDK Pro v4.0c (X64).
 
 ## Install (Arch package — recommended)
 
-`sgpam` is a pacman package. It depends on two companion packages built from the
-**proprietary SecuGen FDx SDK Pro**, which you must supply (SecuGen does not permit
-public redistribution):
+`sgpam` is a pacman package. Its two dependency packages — and the proprietary
+SecuGen FDx SDK Pro they build against — live in the private monorepo
+**[anthill-tec/fdx-sdk-pro-lin](https://github.com/anthill-tec/fdx-sdk-pro-lin)**
+(access required; the vendor SDK is not publicly redistributable). The PKGBUILD
+dirs sit at the monorepo root beside the bundled SDK:
 
 | Package | Role | Provides |
 |---|---|---|
@@ -33,21 +35,17 @@ public redistribution):
 | `sgpam` | this package | `pam_sgfp.so`, `sg_enroll`, man pages |
 
 Build and install **in dependency order** — `secugen-fdx-sdk` depends on the
-driver, so the driver must be installed first:
+driver, so the driver goes first:
 
 ```fish
-# 1. Driver: runtime libs + udev rule + 'secugen' group
-cd path/to/secugen-fdx-driver
-makepkg -si
+# Dependency packages, from the SDK monorepo:
+git clone git@github.com:anthill-tec/fdx-sdk-pro-lin.git
+cd fdx-sdk-pro-lin/secugen-fdx-driver && makepkg -si    # 1. driver — /usr/lib libs, udev, 'secugen' group
+cd ../secugen-fdx-sdk                 && makepkg -si    # 2. sdk — /usr/include headers (depends on driver)
 
-# 2. SDK: build-time headers (depends on the driver)
-cd path/to/secugen-fdx-sdk
-makepkg -si
-
-# 3. sgpam: builds, runs the test suite (check()), installs, and the
-#    post_install hook configures PAM automatically
-cd path/to/sgpam
-makepkg -si
+# sgpam itself:
+git clone git@github.com:anthill-tec/sgpam.git
+cd sgpam && makepkg -si                                 # 3. builds, runs check() tests, installs, configures PAM
 ```
 
 During the `sgpam` install you'll be prompted to confirm PAM setup for
