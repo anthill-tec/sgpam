@@ -3,6 +3,7 @@
 *.so
 sg_enroll
 sg-drm-blank
+sg-probe
 
 # SDK / library files
 *.a

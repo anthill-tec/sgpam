@@ -82,7 +82,7 @@ check-arch:
 	@file /usr/lib/security/pam_unix.so
 
 clean:
-	rm -f pam_sgfp.o pam_sgfp.so sg_enroll sg-drm-blank
+	rm -f pam_sgfp.o pam_sgfp.so sg_enroll sg-drm-blank sg-probe
 	rm -f tests/*.o tests/test_valid_username tests/test_load_template \
 	      tests/test_pam_authenticate tests/test_sg_enroll \
 	      tests/test_finger_names tests/test_load_templates \
