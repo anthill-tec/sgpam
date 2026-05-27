@@ -35,6 +35,7 @@ typedef struct {
     DWORD get_matching_score_rv;
     DWORD get_template_size_rv;
     DWORD set_brightness_rv;
+    DWORD write_data_rv;
     DWORD terminate_rv;
 
     /* ── SDK output parameters ────────────────────────────────── */
@@ -49,6 +50,8 @@ typedef struct {
     DWORD   matching_score;        /* written by GetMatchingScore    */
     DWORD   template_size;         /* written by GetTemplateSize     */
     DWORD   last_brightness;       /* last value passed to SetBrightness */
+    DWORD   last_write_index;      /* last index passed to WriteData     */
+    DWORD   last_write_value;      /* last data  passed to WriteData     */
 
     /* ── Per-call match results for multi-template testing ────── */
     BOOL   *match_results;      /* array, or NULL to use single match_result */
@@ -63,6 +66,7 @@ typedef struct {
     int get_image_ex_count;
     int create_template_count;
     int set_brightness_count;
+    int write_data_count;
 
     /* ── PAM mock state ───────────────────────────────────────── */
     int          pam_get_user_rv;  /* PAM_SUCCESS, PAM_AUTH_ERR, etc */
@@ -92,6 +96,7 @@ static inline void mock_state_reset(void)
     g_mock.get_matching_score_rv   = SGFDX_ERROR_NONE;
     g_mock.get_template_size_rv    = SGFDX_ERROR_NONE;
     g_mock.set_brightness_rv       = SGFDX_ERROR_NONE;
+    g_mock.write_data_rv           = SGFDX_ERROR_NONE;
     g_mock.terminate_rv            = SGFDX_ERROR_NONE;
 
     /* Typical U20 dimensions */

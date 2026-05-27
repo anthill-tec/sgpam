@@ -44,6 +44,11 @@ pam_sgfp.so: pam_sgfp.c sg_fingers.h
 sg_enroll: sg_enroll.c sg_fingers.h
 	$(CC) $(CFLAGS) -o sg_enroll sg_enroll.c $(LDFLAGS_COMMON) $(LIBS_ENROLL)
 
+# Developer/debug SDK probe — NOT built by `all`, NOT installed, NOT packaged.
+# For interactive hardware diagnostics only (see sg_probe.c).
+sg-probe: sg_probe.c
+	$(CC) $(CFLAGS) -o sg-probe sg_probe.c $(LDFLAGS_COMMON) $(LIBS_ENROLL)
+
 sg-drm-blank: sg-drm-blank.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 $(DRM_CFLAGS) -o sg-drm-blank sg-drm-blank.c $(DRM_LIBS)
 
@@ -100,6 +105,7 @@ WRAP_SDK = -Wl,--wrap=SGFPM_Create \
            -Wl,--wrap=SGFPM_GetImageEx \
            -Wl,--wrap=SGFPM_GetImageQuality \
            -Wl,--wrap=SGFPM_SetBrightness \
+           -Wl,--wrap=SGFPM_WriteData \
            -Wl,--wrap=SGFPM_CreateTemplate \
            -Wl,--wrap=SGFPM_GetTemplateSize \
            -Wl,--wrap=SGFPM_MatchTemplate \

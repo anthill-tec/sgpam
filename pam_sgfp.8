@@ -69,6 +69,12 @@ Values outside 1\(en10 are ignored and logged.
 This is the only tunable.
 The sensor exposure escalation below is fully automatic and derived from it.
 .SH EXPOSURE ESCALATION
+On open the module enables the sensor's
+.B Smart Capture
+mode (the firmware's automatic gain control), which is the primary
+image-quality mechanism on these readers; capture quality collapses without
+it. Brightness escalation below is a secondary, complementary lever.
+.PP
 The module brightens the sensor LED automatically across the
 .B retries
 attempts, with no parameter to configure.

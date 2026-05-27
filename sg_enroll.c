@@ -538,6 +538,13 @@ int main(int argc, char *argv[])
     if (err != SGFDX_ERROR_NONE) die("SGFPM_OpenDevice — is the U20 plugged in?", err);
     devOpened = 1;
 
+    /* Enable Smart Capture (firmware AGC) — WriteData index 5. The dominant
+       quality lever on the U20; templates must be enrolled with it on, the same
+       as PAM auth, so the capture conditions match. Non-fatal if unsupported. */
+    err = SGFPM_WriteData(hFPM, 5, 1);
+    if (err != SGFDX_ERROR_NONE)
+        fprintf(stderr, "Warning: enabling Smart Capture failed (err %lu)\n", err);
+
     SGDeviceInfoParam devInfo;
     memset(&devInfo, 0, sizeof(devInfo));
     SGFPM_GetDeviceInfo(hFPM, &devInfo);
@@ -545,7 +552,7 @@ int main(int argc, char *argv[])
            devInfo.ImageWidth, devInfo.ImageHeight, devInfo.ImageDPI,
            devInfo.Brightness);
 
-    /* Guard against overflow: U20 is 260x300; reject anything absurd */
+    /* Guard against overflow: U20 reports 300x400; reject anything absurd */
     if (devInfo.ImageWidth == 0 || devInfo.ImageHeight == 0 ||
         devInfo.ImageWidth > 4096 || devInfo.ImageHeight > 4096) {
         fprintf(stderr, "Suspicious image dimensions %lux%lu\n",

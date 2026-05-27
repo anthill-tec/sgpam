@@ -203,6 +203,29 @@ Test(sg_enroll, invalid_security_level, .init = setup, .fini = teardown)
     cr_assert_eq(rc, 1, "should reject invalid security level");
 }
 
+/* ── Smart Capture (AGC) enable ───────────────────────────── */
+
+Test(sg_enroll, enrollment_enables_smart_capture, .init = setup, .fini = teardown)
+{
+    g_mock.match_result = TRUE;
+    g_mock.matching_score = 150;
+    g_mock.template_size = 400;
+
+    char *argv[] = {"sg_enroll", "jane", "right-index", NULL};
+    int rc = sg_enroll_main(3, argv);
+    cr_assert_eq(rc, 0, "expected success, got %d", rc);
+
+    cr_assert_geq(g_mock.write_data_count, 1,
+                  "Smart Capture must be enabled after open, got %d WriteData calls",
+                  g_mock.write_data_count);
+    cr_assert_eq(g_mock.last_write_index, 5,
+                 "Smart Capture is WriteData index 5, got %lu",
+                 g_mock.last_write_index);
+    cr_assert_eq(g_mock.last_write_value, 1,
+                 "Smart Capture must be enabled (value 1), got %lu",
+                 g_mock.last_write_value);
+}
+
 /* ── Brightness tests ─────────────────────────────────────── */
 
 Test(sg_enroll, enrollment_sets_default_brightness, .init = setup, .fini = teardown)

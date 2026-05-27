@@ -96,6 +96,15 @@ DWORD __wrap_SGFPM_SetBrightness(HSGFPM hFPM, DWORD brightness)
     return g_mock.set_brightness_rv;
 }
 
+DWORD __wrap_SGFPM_WriteData(HSGFPM hFPM, unsigned char index, unsigned char data)
+{
+    (void)hFPM;
+    g_mock.write_data_count++;
+    g_mock.last_write_index = index;
+    g_mock.last_write_value = data;
+    return g_mock.write_data_rv;
+}
+
 /* ── Template operations ────────────────────────────────────── */
 
 DWORD __wrap_SGFPM_GetMaxTemplateSize(HSGFPM hFPM, DWORD *size)

@@ -333,6 +333,15 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     }
     devOpened = 1;
 
+    /* 5b. Enable Smart Capture (firmware AGC) — WriteData index 5. This is the
+       dominant image-quality lever on the U20: with it on the sensor engages
+       automatic gain; with it off quality collapses. On by default, but set
+       explicitly so auth never runs with AGC off. Non-fatal if unsupported. */
+    err = SGFPM_WriteData(hFPM, 5, 1);
+    if (err != SGFDX_ERROR_NONE)
+        syslog(LOG_AUTH | LOG_WARNING,
+               "pam_sgfp: enabling Smart Capture failed (%lu)", err);
+
     /* 6. Query image dimensions */
     memset(&devInfo, 0, sizeof(devInfo));
     err = SGFPM_GetDeviceInfo(hFPM, &devInfo);
@@ -341,7 +350,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
         goto cleanup;
     }
 
-    /* Guard against overflow: U20 is 260x300 = 78000; reject anything absurd */
+    /* Guard against overflow: U20 reports 300x400 = 120000; reject anything absurd */
     if (devInfo.ImageWidth == 0 || devInfo.ImageHeight == 0 ||
         devInfo.ImageWidth > 4096 || devInfo.ImageHeight > 4096) {
         syslog(LOG_AUTH | LOG_ERR,

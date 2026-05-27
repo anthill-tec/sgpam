@@ -290,6 +290,26 @@ Test(pam_authenticate, brightness_arg_no_longer_recognized, .init = setup,
                  "brightness= must be ignored; first attempt stays at sensor default");
 }
 
+/* ── Smart Capture (AGC) enable ───────────────────────────── */
+
+Test(pam_authenticate, enables_smart_capture, .init = setup, .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = TRUE;
+
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_SUCCESS);
+    cr_assert_geq(g_mock.write_data_count, 1,
+                  "Smart Capture must be enabled after open, got %d WriteData calls",
+                  g_mock.write_data_count);
+    cr_assert_eq(g_mock.last_write_index, 5,
+                 "Smart Capture is WriteData index 5, got %lu",
+                 g_mock.last_write_index);
+    cr_assert_eq(g_mock.last_write_value, 1,
+                 "Smart Capture must be enabled (value 1), got %lu",
+                 g_mock.last_write_value);
+}
+
 /* ── Quiet multi-sample retry (default 3 attempts) ────────── */
 
 Test(pam_authenticate, success_first_attempt_no_extra_captures, .init = setup,
