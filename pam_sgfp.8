@@ -67,26 +67,41 @@ stored in the template, so a mismatch between the enrollment brightness
 and the login brightness degrades matching.
 Values outside 0\(en100 are ignored and logged via
 .BR syslog (3).
-If the argument is omitted, the sensor's default exposure is used.
+If the argument is omitted, the first attempt uses the sensor's own
+default exposure and later attempts escalate from 50 (see
+.BR brightness_step ).
 When
 .B brightness_step
-is also given, this value is the starting exposure for the first attempt.
+is given a non-zero value,
+.B brightness=N
+is the starting exposure applied from the very first attempt.
 .TP
 .BI brightness_step= N
-Escalate exposure in lock-step with the retry loop: an integer from 1 to
+Escalate exposure in lock-step with the retry loop: an integer from 0 to
 100 added to the brightness after each failed sample (capped at 100)
 before the next attempt.
-The first attempt starts at
-.BI brightness= N
-if given, otherwise at 50.
+.B Escalation is on by default
+with a step of 15; set
+.B brightness_step=0
+for constant exposure (the original behaviour).
+.IP
+If
+.B brightness=N
+is set, escalation starts from
+.I N
+on the first attempt.
+Otherwise the first attempt keeps the sensor's own exposure \(em so a
+sensor that already works is left untouched \(em and escalation begins at
+50 on the second attempt.
 This gives a dim or dry finger progressively brighter light within a
 single prompt, mirroring the auto-escalation of
 .BR sg_enroll (1).
-When omitted, exposure is constant (the original behaviour).
-For example,
+For example, with the defaults a bare
+.B pam_sgfp.so
+samples at (sensor default), 50, then 65; whereas
 .B "brightness=40 brightness_step=20 retries=3"
-samples at brightness 40, 60, then 80.
-Values outside 1\(en100 are ignored and logged.
+samples at 40, 60, then 80.
+Values outside 0\(en100 are ignored and logged.
 .TP
 .BI retries= N
 Number of times to silently sample the sensor before rejecting,

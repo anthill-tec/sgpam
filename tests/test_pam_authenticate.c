@@ -412,15 +412,35 @@ Test(pam_authenticate, brightness_escalates_from_default_base, .init = setup,
     write_template("testuser", 400);
     g_mock.match_result = FALSE;
 
-    /* step given but no explicit base -> starts at default 50 */
+    /* step given but no explicit base: attempt 1 keeps the sensor default
+       (no set), then escalates from 50. With step 20 over 3 attempts the
+       brightness sequence is (sensor), 50, 70 — only two SetBrightness calls. */
     const char *args[] = {"brightness_step=20"};
     int rc = pam_sm_authenticate(NULL, 0, 1, args);
     cr_assert_eq(rc, PAM_AUTH_ERR);
-    cr_assert_eq(g_mock.set_brightness_count, 3,
-                 "should set brightness each attempt, got %d",
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "first attempt keeps sensor default; only 2 later sets, got %d",
                  g_mock.set_brightness_count);
-    cr_assert_eq(g_mock.last_brightness, 90,
-                 "50,70,90 from default base 50 step 20; last should be 90, got %lu",
+    cr_assert_eq(g_mock.last_brightness, 70,
+                 "attempts: sensor,50,70; last should be 70, got %lu",
+                 g_mock.last_brightness);
+}
+
+Test(pam_authenticate, default_escalates_on_failure_only, .init = setup,
+     .fini = teardown)
+{
+    write_template("testuser", 400);
+    g_mock.match_result = FALSE;          /* all attempts fail */
+
+    /* No args at all: brightness_step defaults to 15 (escalation on), base 50.
+       Attempt 1 keeps the sensor default; attempts 2,3 use 50 then 65. */
+    int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
+    cr_assert_eq(rc, PAM_AUTH_ERR);
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "first attempt untouched; 2 later attempts set, got %d",
+                 g_mock.set_brightness_count);
+    cr_assert_eq(g_mock.last_brightness, 65,
+                 "default step 15 from base 50 -> 50,65; last should be 65, got %lu",
                  g_mock.last_brightness);
 }
 
