@@ -5,7 +5,6 @@ pam_sgfp \- PAM module for SecuGen fingerprint authentication
 .B auth
 .RI [ sufficient | required ]
 .B pam_sgfp.so
-.RI [ brightness = N ]
 .RI [ brightness_step = N ]
 .RI [ retries = N ]
 .SH DESCRIPTION
@@ -52,46 +51,29 @@ Matching uses security level
 (match score >= 80/199).
 .SH MODULE ARGUMENTS
 .TP
-.BI brightness= N
-Set the sensor exposure (LED brightness) to
-.IR N ,
-an integer from 0 to 100, before capturing.
-This should match the brightness that produced good image quality during
-enrollment (see the
-.B \-b
-option of
-.BR sg_enroll (1)).
-Brightness is a live device setting and is
-.B not
-stored in the template, so a mismatch between the enrollment brightness
-and the login brightness degrades matching.
-Values outside 0\(en100 are ignored and logged via
-.BR syslog (3).
-If omitted, the escalation floor is taken from the sensor's own reported
-brightness instead (see
-.BR brightness_step ).
-.TP
 .BI brightness_step= N
-Control how exposure escalates across the retry attempts.
+Control how the sensor exposure (LED brightness) escalates across the retry
+attempts.
+There is no way to set an absolute brightness: the module reads the sensor's
+current LED brightness from the device on each authentication and uses it as
+the escalation
+.I floor
+(falling back to 50 only if the readout is unusable).
+The floor is logged via
+.BR syslog (3)
+so the active range is visible.
 .IP
 By default (argument absent) an
 .B adaptive ladder
-is used: the brightness scales evenly from a
-.I floor
-up to the ceiling of 100, spread across the
+is used: the brightness scales evenly from the floor up to the ceiling of
+100, spread across the
 .B retries
 attempts.
-The floor is the sensor's own LED brightness as read back from the device
-\(em or
-.BI brightness= N
-if that is given, or 50 if the readout is unusable \(em and is logged so
-the active floor is visible.
 The ceiling is hard-clamped at 100 (the SDK does not police out-of-range
 values itself).
-With no explicit
-.BI brightness= N
-the first attempt keeps the sensor's own exposure untouched and scaling
-begins on the second attempt, so a sensor that already works is left alone.
+The first attempt always keeps the sensor's own exposure untouched and
+scaling begins on the second attempt, so a sensor that already works is
+left alone.
 .IP
 A positive
 .I N
@@ -106,8 +88,8 @@ For example, a sensor reporting 40 with
 samples at (sensor), 70, 100; reporting 70 with
 .B retries=4
 gives (sensor), 80, 90, 100; while
-.B "brightness=40 brightness_step=20 retries=3"
-forces 40, 60, 80.
+.B "brightness_step=20 retries=3"
+from a floor of 40 forces (sensor), 60, 80.
 Values outside 0\(en100 are ignored and logged.
 .TP
 .BI retries= N
@@ -225,12 +207,12 @@ auth  include     system-auth
 .fi
 .RE
 .PP
-With a fixed sensor brightness (matching
-.B "sg_enroll -b 85" ):
+Allowing more samples and a fixed exposure step before falling through to
+the password rule:
 .PP
 .RS
 .nf
-auth  sufficient  pam_sgfp.so brightness=85
+auth  sufficient  pam_sgfp.so retries=4 brightness_step=20
 auth  include     system-auth
 .fi
 .RE

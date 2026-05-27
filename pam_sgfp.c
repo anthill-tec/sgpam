@@ -38,19 +38,17 @@
 #define SECURITY_LEVEL   SL_NORMAL        /* score ≥ 80 (SDK recommended) */
 #define TEMPLATE_FORMAT  TEMPLATE_FORMAT_SG400  /* 400 B, encrypted */
 
-/* Optional module argument: brightness=N (0–100) sets sensor exposure.
-   Match the value that produced good quality at enrollment (sg_enroll -b). */
-#define BRIGHTNESS_ARG   "brightness="
-
-/* Exposure escalation across the retry loop. By default the brightness scales
-   from a floor up to PAM_BRIGHTNESS_MAX spread evenly over the retry attempts
-   (the readout-driven ladder): the floor is the sensor's reported brightness
-   (or brightness=N if given, or PAM_BRIGHTNESS_START if the readout is
-   unusable), and the ceiling is hard-clamped at 100. With no explicit
-   brightness=N the first attempt keeps the sensor's own exposure untouched and
-   scaling begins on the second attempt — so a sensor that already works is left
-   alone. The optional brightness_step=N argument overrides the adaptive ladder
-   with a fixed per-attempt increment; brightness_step=0 disables escalation. */
+/* Exposure escalation across the retry loop. The escalation floor is read from
+   the device on each authentication (SGDeviceInfoParam.Brightness) — there is
+   no brightness= argument; the module self-populates from the sensor, falling
+   back to PAM_BRIGHTNESS_START only if the readout is unusable. By default the
+   brightness then scales from that floor up to PAM_BRIGHTNESS_MAX, spread evenly
+   over the retry attempts (the readout-driven ladder), with the ceiling hard-
+   clamped at 100. The first attempt always keeps the sensor's own exposure
+   untouched and scaling begins on the second attempt — so a sensor that already
+   works is left alone. The optional brightness_step=N argument overrides the
+   adaptive ladder with a fixed per-attempt increment; brightness_step=0
+   disables escalation entirely. */
 #define BRIGHTNESS_STEP_ARG      "brightness_step="
 #define PAM_BRIGHTNESS_START     50    /* floor fallback when readout unusable */
 #define PAM_BRIGHTNESS_MAX       100   /* hard ceiling                         */
@@ -262,9 +260,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
 {
     (void)flags;
 
-    /* Parse module arguments: brightness=N (0–100), retries=N (1–MAX_ATTEMPTS) */
-    DWORD brightness       = 0;
-    int   have_brightness  = 0;
+    /* Parse module arguments: brightness_step=N (0–100), retries=N (1–MAX_ATTEMPTS) */
     int   brightness_step  = BRIGHTNESS_STEP_ADAPTIVE;  /* adaptive by default */
     int   capture_attempts = CAPTURE_ATTEMPTS;
     for (int i = 0; i < argc; i++) {
@@ -279,15 +275,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
                 syslog(LOG_AUTH | LOG_WARNING,
                        "pam_sgfp: ignoring out-of-range brightness_step '%s'",
                        argv[i]);
-            }
-        } else if (strncmp(argv[i], BRIGHTNESS_ARG, sizeof(BRIGHTNESS_ARG) - 1) == 0) {
-            long v = strtol(argv[i] + sizeof(BRIGHTNESS_ARG) - 1, NULL, 10);
-            if (v >= 0 && v <= 100) {
-                brightness = (DWORD)v;
-                have_brightness = 1;
-            } else {
-                syslog(LOG_AUTH | LOG_WARNING,
-                       "pam_sgfp: ignoring out-of-range brightness '%s'", argv[i]);
             }
         } else if (strncmp(argv[i], RETRIES_ARG, sizeof(RETRIES_ARG) - 1) == 0) {
             long v = strtol(argv[i] + sizeof(RETRIES_ARG) - 1, NULL, 10);
@@ -387,30 +374,18 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
     liveTmpl = malloc(maxTmplSize);
     if (!liveTmpl) goto cleanup;
 
-    /* 6b. Read back the sensor's current LED brightness and derive the
-       escalation floor: an explicit brightness=N wins, else the sensor's own
-       readout (when sane), else the fallback start. Logged so the active floor
-       is visible in the auth log. */
+    /* 6b. Read back the sensor's current LED brightness and use it as the
+       escalation floor (falling back to PAM_BRIGHTNESS_START if the readout is
+       unusable). Logged so the active range is visible in the auth log. */
     DWORD sensor_brightness = devInfo.Brightness;
-    DWORD bright_floor;
-    if (have_brightness)
-        bright_floor = brightness;
-    else if (sensor_brightness >= 1 && sensor_brightness <= PAM_BRIGHTNESS_MAX)
-        bright_floor = sensor_brightness;
-    else
-        bright_floor = PAM_BRIGHTNESS_START;
+    DWORD bright_floor =
+        (sensor_brightness >= 1 && sensor_brightness <= PAM_BRIGHTNESS_MAX)
+            ? sensor_brightness
+            : PAM_BRIGHTNESS_START;
 
     syslog(LOG_AUTH | LOG_INFO,
            "pam_sgfp: LED brightness readout %lu; escalation floor %lu, ceiling %d",
            sensor_brightness, bright_floor, PAM_BRIGHTNESS_MAX);
-
-    /* Constant exposure (brightness_step=0) with an explicit base: set it once. */
-    if (have_brightness && brightness_step == 0) {
-        err = SGFPM_SetBrightness(hFPM, brightness);
-        if (err != SGFDX_ERROR_NONE)
-            syslog(LOG_AUTH | LOG_WARNING,
-                   "pam_sgfp: SetBrightness(%lu) failed (%lu)", brightness, err);
-    }
 
     /* 7. Prompt once, then sample quietly up to capture_attempts times.
        Each attempt captures, extracts and matches; the first match wins.
@@ -423,12 +398,12 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags,
          attempt++) {
 
         /* 7a0. Scale exposure toward the ceiling in lock-step with the attempt.
-           Floor = bright_floor (readout / explicit base / fallback); ceiling =
+           Floor = bright_floor (the device readout, or the fallback); ceiling =
            PAM_BRIGHTNESS_MAX. A positive brightness_step uses a fixed increment;
            otherwise the floor..ceiling span is spread evenly across the retry
-           attempts. The first attempt keeps the sensor's own exposure unless an
-           explicit brightness=N base was given. brightness_step=0 skips this. */
-        if (brightness_step != 0 && (have_brightness || attempt >= 2)) {
+           attempts. The first attempt always keeps the sensor's own exposure;
+           scaling starts on the second. brightness_step=0 skips this entirely. */
+        if (brightness_step != 0 && attempt >= 2) {
             DWORD cur;
             if (brightness_step > 0)
                 cur = bright_floor + (DWORD)(attempt - 1) * (DWORD)brightness_step;

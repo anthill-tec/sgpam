@@ -261,23 +261,9 @@ Test(pam_authenticate, multi_template_none_match, .init = setup,
                  "should try both templates on each of the 3 attempts");
 }
 
-/* ── Brightness module argument ───────────────────────────── */
+/* ── Brightness floor comes from the device, not an argument ── */
 
-Test(pam_authenticate, brightness_arg_applied, .init = setup, .fini = teardown)
-{
-    write_template("testuser", 400);
-    g_mock.match_result = TRUE;
-
-    const char *args[] = {"brightness=70"};
-    int rc = pam_sm_authenticate(NULL, 0, 1, args);
-    cr_assert_eq(rc, PAM_SUCCESS);
-    cr_assert_eq(g_mock.set_brightness_count, 1,
-                 "SetBrightness should be called once");
-    cr_assert_eq(g_mock.last_brightness, 70,
-                 "brightness should be 70, got %lu", g_mock.last_brightness);
-}
-
-Test(pam_authenticate, no_brightness_arg_skips_setbrightness, .init = setup,
+Test(pam_authenticate, first_attempt_keeps_sensor_default, .init = setup,
      .fini = teardown)
 {
     write_template("testuser", 400);
@@ -286,20 +272,22 @@ Test(pam_authenticate, no_brightness_arg_skips_setbrightness, .init = setup,
     int rc = pam_sm_authenticate(NULL, 0, 0, NULL);
     cr_assert_eq(rc, PAM_SUCCESS);
     cr_assert_eq(g_mock.set_brightness_count, 0,
-                 "SetBrightness must not be called without brightness= arg");
+                 "first attempt must keep the sensor's own exposure (no set)");
 }
 
-Test(pam_authenticate, out_of_range_brightness_ignored, .init = setup,
+Test(pam_authenticate, brightness_arg_no_longer_recognized, .init = setup,
      .fini = teardown)
 {
     write_template("testuser", 400);
     g_mock.match_result = TRUE;
 
-    const char *args[] = {"brightness=200"};
+    /* brightness=N was removed: the floor is taken from the device readout, so
+       the argument is unknown and must not cause an attempt-1 SetBrightness. */
+    const char *args[] = {"brightness=70"};
     int rc = pam_sm_authenticate(NULL, 0, 1, args);
-    cr_assert_eq(rc, PAM_SUCCESS, "auth should still succeed");
+    cr_assert_eq(rc, PAM_SUCCESS);
     cr_assert_eq(g_mock.set_brightness_count, 0,
-                 "out-of-range brightness must be ignored");
+                 "brightness= must be ignored; first attempt stays at sensor default");
 }
 
 /* ── Quiet multi-sample retry (default 3 attempts) ────────── */
@@ -379,16 +367,19 @@ Test(pam_authenticate, brightness_escalates_each_failed_attempt, .init = setup,
      .fini = teardown)
 {
     write_template("testuser", 400);
+    g_mock.devinfo_brightness = 40;       /* readout -> escalation floor 40 */
     g_mock.match_result = FALSE;          /* every attempt fails */
 
-    const char *args[] = {"brightness=40", "brightness_step=20"};
-    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    /* Fixed step 20 from floor 40 over 3 attempts: rungs 40,60,80. Attempt 1
+       keeps the sensor default (40), so attempts 2 (60) and 3 (80) are set. */
+    const char *args[] = {"brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
     cr_assert_eq(rc, PAM_AUTH_ERR);
-    cr_assert_eq(g_mock.set_brightness_count, 3,
-                 "brightness should be set once per attempt, got %d",
+    cr_assert_eq(g_mock.set_brightness_count, 2,
+                 "first attempt untouched; 2 later attempts set, got %d",
                  g_mock.set_brightness_count);
     cr_assert_eq(g_mock.last_brightness, 80,
-                 "3 attempts from 40 step 20 -> 40,60,80; last should be 80, got %lu",
+                 "floor 40 step 20 -> 40,60,80; last set should be 80, got %lu",
                  g_mock.last_brightness);
 }
 
@@ -396,13 +387,14 @@ Test(pam_authenticate, brightness_escalation_caps_at_100, .init = setup,
      .fini = teardown)
 {
     write_template("testuser", 400);
+    g_mock.devinfo_brightness = 80;       /* readout -> floor 80 */
     g_mock.match_result = FALSE;
 
-    const char *args[] = {"brightness=80", "brightness_step=30"};
-    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    const char *args[] = {"brightness_step=30"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
     cr_assert_eq(rc, PAM_AUTH_ERR);
     cr_assert_eq(g_mock.last_brightness, 100,
-                 "80,110->100,140->100; should cap at 100, got %lu",
+                 "floor 80: 80,110->100,140->100; should cap at 100, got %lu",
                  g_mock.last_brightness);
 }
 
@@ -449,29 +441,6 @@ Test(pam_authenticate, adaptive_ladder_starts_at_sensor_readout, .init = setup,
                  g_mock.last_brightness);
 }
 
-Test(pam_authenticate, explicit_brightness_overrides_readout_floor, .init = setup,
-     .fini = teardown)
-{
-    write_template("testuser", 400);
-    g_mock.devinfo_brightness = 70;       /* readout would be 70 ... */
-    BOOL results[] = {FALSE, TRUE};
-    g_mock.match_results = results;
-    g_mock.match_results_len = 2;
-
-    /* brightness=40 overrides the readout as the floor. Adaptive over 3
-       attempts: 40,70,100. With an explicit base, attempt 1 is set (40),
-       attempt 2 (70) matches. last==70 proves floor=40, not the readout 70. */
-    const char *args[] = {"brightness=40"};
-    int rc = pam_sm_authenticate(NULL, 0, 1, args);
-    cr_assert_eq(rc, PAM_SUCCESS);
-    cr_assert_eq(g_mock.set_brightness_count, 2,
-                 "explicit base sets attempt 1 too, got %d",
-                 g_mock.set_brightness_count);
-    cr_assert_eq(g_mock.last_brightness, 70,
-                 "floor 40 over 3 rungs: 40,70,100; matched at 70, got %lu",
-                 g_mock.last_brightness);
-}
-
 Test(pam_authenticate, brightness_step_zero_disables_escalation, .init = setup,
      .fini = teardown)
 {
@@ -512,15 +481,18 @@ Test(pam_authenticate, brightness_escalation_stops_on_match, .init = setup,
      .fini = teardown)
 {
     write_template("testuser", 400);
+    g_mock.devinfo_brightness = 40;       /* readout -> floor 40 */
     BOOL results[] = {FALSE, TRUE};       /* match on 2nd attempt */
     g_mock.match_results = results;
     g_mock.match_results_len = 2;
 
-    const char *args[] = {"brightness=40", "brightness_step=20"};
-    int rc = pam_sm_authenticate(NULL, 0, 2, args);
+    /* Fixed step 20 from floor 40. Attempt 1 keeps sensor default (40) and
+       fails; attempt 2 sets 60 and matches, so escalation stops there. */
+    const char *args[] = {"brightness_step=20"};
+    int rc = pam_sm_authenticate(NULL, 0, 1, args);
     cr_assert_eq(rc, PAM_SUCCESS);
-    cr_assert_eq(g_mock.set_brightness_count, 2,
-                 "should stop escalating after the matching attempt, got %d",
+    cr_assert_eq(g_mock.set_brightness_count, 1,
+                 "only the matching attempt 2 sets brightness, got %d",
                  g_mock.set_brightness_count);
     cr_assert_eq(g_mock.last_brightness, 60,
                  "matched on attempt 2 at brightness 60, got %lu",
